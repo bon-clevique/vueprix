@@ -1,0 +1,68 @@
+name: vueprix-bot
+
+# Required GitHub Actions secrets:
+#   KEEPA_API_KEY
+#   PAAPI_ACCESS_KEY, PAAPI_SECRET_KEY, PAAPI_PARTNER_TAG
+#   ANTHROPIC_API_KEY
+#   X_API_KEY, X_API_SECRET, X_ACCESS_TOKEN, X_ACCESS_TOKEN_SECRET
+#   BSKY_IDENTIFIER (or hardcode below), BSKY_PASSWORD
+
+on:
+  schedule:
+    - cron: '0 */2 * * *'   # every 2 hours
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Run without posting (true/false)'
+        required: false
+        default: 'true'
+
+permissions:
+  contents: write   # required to commit data/posted.json
+
+concurrency:
+  group: vueprix-bot
+  cancel-in-progress: false
+
+jobs:
+  run-bot:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .tool-versions
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run bot
+        env:
+          KEEPA_API_KEY: ${{ secrets.KEEPA_API_KEY }}
+          PAAPI_ACCESS_KEY: ${{ secrets.PAAPI_ACCESS_KEY }}
+          PAAPI_SECRET_KEY: ${{ secrets.PAAPI_SECRET_KEY }}
+          PAAPI_PARTNER_TAG: ${{ secrets.PAAPI_PARTNER_TAG }}
+          PAAPI_HOST: webservices.amazon.co.jp
+          PAAPI_REGION: us-west-2
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          X_API_KEY: ${{ secrets.X_API_KEY }}
+          X_API_SECRET: ${{ secrets.X_API_SECRET }}
+          X_ACCESS_TOKEN: ${{ secrets.X_ACCESS_TOKEN }}
+          X_ACCESS_TOKEN_SECRET: ${{ secrets.X_ACCESS_TOKEN_SECRET }}
+          BSKY_IDENTIFIER: ${{ secrets.BSKY_IDENTIFIER }}
+          BSKY_PASSWORD: ${{ secrets.BSKY_PASSWORD }}
+          DRY_RUN: ${{ github.event.inputs.dry_run || 'true' }}
+          LOG_LEVEL: info
+        run: npm start
+
+      - name: Commit posted.json
+        run: |
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          git add data/posted.json
+          if ! git diff --staged --quiet; then
+            git commit -m "chore: update posted.json [skip ci]"
+            git push
+          fi

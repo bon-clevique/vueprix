@@ -1,0 +1,43 @@
+{
+  "name": "vueprix",
+  "version": "0.1.0",
+  "description": "Amazon price-drop alert bot for X (@vueprix) and Bluesky, focused on food / health / quality-of-life products.",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "start": "tsx src/index.ts",
+    "build": "tsc",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint . --max-warnings=0",
+    "test": "vitest run"
+  },
+  "keywords": [
+    "amazon",
+    "affiliate",
+    "bot",
+    "keepa",
+    "bluesky"
+  ],
+  "author": "bon",
+  "license": "UNLICENSED",
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.94.0",
+    "@atproto/api": "^0.19.13",
+    "axios": "^1.16.0",
+    "dotenv": "^17.4.2",
+    "paapi5-nodejs-sdk": "^1.1.0",
+    "twitter-api-v2": "^1.29.0"
+  },
+  "overrides": {
+    "crypto-js": "^4.2.0"
+  },
+  "devDependencies": {
+    "@types/node": "^25.6.0",
+    "@typescript-eslint/eslint-plugin": "^8.59.2",
+    "@typescript-eslint/parser": "^8.59.2",
+    "eslint": "^10.3.0",
+    "tsx": "^4.21.0",
+    "typescript": "^6.0.3",
+    "vitest": "^4.1.5"
+  }
+}
