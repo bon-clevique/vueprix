@@ -1,3 +1,4 @@
+import { randomBytes } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { COOLDOWN_HOURS, DROP_THRESHOLD_PERCENT, POSTED_JSON_PATH } from './config.js';
@@ -78,10 +79,10 @@ export const savePosted = async (
 ): Promise<void> => {
   const abs = resolvePostedPath(filePath);
   await fs.mkdir(path.dirname(abs), { recursive: true });
-  const tmp = `${abs}.tmp.${process.pid}.${Math.random().toString(36).slice(2, 10)}`;
+  const tmp = `${abs}.tmp.${process.pid}.${randomBytes(16).toString('hex')}`;
   const data = `${JSON.stringify(posted, null, 2)}\n`;
   try {
-    await fs.writeFile(tmp, data, 'utf-8');
+    await fs.writeFile(tmp, data, { encoding: 'utf-8', flag: 'wx' });
     await fs.rename(tmp, abs);
   } catch (err) {
     await fs.rm(tmp, { force: true }).catch(() => undefined);
