@@ -55,8 +55,11 @@ const centsToYen = (cents: number | undefined): number => {
 };
 
 export const getDeals = async (categoryId: number): Promise<Deal[]> => {
-  const url = `${KEEPA_BASE}/deals`;
-  const selection = JSON.stringify({
+  // Keepa Browsing Deals API: POST /deal with DealRequest JSON body.
+  // Reference: keepacom/api_backend Request.java#getDealsRequest
+  // (r.path = "deal", r.postData = gson.toJson(dealRequest))
+  const url = `${KEEPA_BASE}/deal`;
+  const dealRequest = {
     page: 0,
     domainId: KEEPA_DOMAIN,
     excludeCategories: [],
@@ -67,9 +70,9 @@ export const getDeals = async (categoryId: number): Promise<Deal[]> => {
     isFilterEnabled: true,
     sortType: 4,
     dateRange: 0,
-  });
-  const res = await axios.get<KeepaDealsResponse>(url, {
-    params: { key: apiKey(), domain: KEEPA_DOMAIN, selection },
+  };
+  const res = await axios.post<KeepaDealsResponse>(url, dealRequest, {
+    params: { key: apiKey() },
     timeout: 30_000,
   });
   logger.info('keepa', 'deals fetched', {
