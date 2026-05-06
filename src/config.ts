@@ -10,9 +10,12 @@ export const FIXED_ASINS: readonly string[] = [
 ];
 
 // Amazon.co.jp = Keepa domain 5
-// 2277721051: 食品・飲料, 2250739051: ドラッグストア
+// Verified 2026-05-06 via scripts/verify-keepa-categories.ts:
+//   57239051  → 食品・飲料・お酒 (2,192,897 products, root)
+//   160384011 → ドラッグストア (3,577,632 products, root)
+// See docs/notes/keepa-categories.md
 export const KEEPA_DOMAIN = 5;
-export const KEEPA_CATEGORIES: readonly number[] = [2277721051, 2250739051];
+export const KEEPA_CATEGORIES: readonly number[] = [57239051, 160384011];
 
 export const DROP_THRESHOLD_PERCENT = 15;
 export const HISTORY_DAYS = 90;

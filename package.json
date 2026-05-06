@@ -19,17 +19,16 @@
     "bluesky"
   ],
   "author": "bon",
-  "license": "UNLICENSED",
+  "license": "SEE LICENSE IN LICENSE",
   "dependencies": {
     "@anthropic-ai/sdk": "^0.94.0",
     "@atproto/api": "^0.19.13",
+    "@aws-sdk/hash-node": "^3.370.0",
+    "@aws-sdk/signature-v4": "^3.370.0",
+    "@smithy/protocol-http": "^5.3.14",
     "axios": "^1.16.0",
     "dotenv": "^17.4.2",
-    "paapi5-nodejs-sdk": "^1.1.0",
     "twitter-api-v2": "^1.29.0"
-  },
-  "overrides": {
-    "crypto-js": "^4.2.0"
   },
   "devDependencies": {
     "@types/node": "^25.6.0",

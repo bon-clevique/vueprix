@@ -1,4 +1,7 @@
-import paapi from 'paapi5-nodejs-sdk';
+import { Hash } from '@aws-sdk/hash-node';
+import { SignatureV4 } from '@aws-sdk/signature-v4';
+import { HttpRequest } from '@smithy/protocol-http';
+import axios, { AxiosError } from 'axios';
 import { logger } from './logger.js';
 
 export interface ProductInfo {
@@ -9,19 +12,39 @@ export interface ProductInfo {
   affiliateUrl: string;
 }
 
+interface PaapiItem {
+  ASIN: string;
+  DetailPageURL?: string;
+  ItemInfo?: { Title?: { DisplayValue?: string } };
+  Images?: { Primary?: { Medium?: { URL?: string }; Large?: { URL?: string } } };
+  Offers?: { Listings?: Array<{ Price?: { Amount?: number; DisplayAmount?: string } }> };
+}
+
+interface PaapiResponse {
+  ItemsResult?: { Items?: PaapiItem[] };
+  Errors?: Array<{ Code: string; Message?: string; __type?: string }>;
+}
+
+const PAAPI_PATH = '/paapi5/getitems';
+const PAAPI_TARGET = 'com.amazon.paapi5.v1.ProductAdvertisingAPIv1.GetItems';
+const PAAPI_SERVICE = 'ProductAdvertisingAPI';
+
 const env = (key: string): string => {
   const v = process.env[key];
   if (!v) throw new Error(`${key} is not set`);
   return v;
 };
 
-const configureClient = (): void => {
-  const client = paapi.ApiClient.instance;
-  client.accessKey = env('PAAPI_ACCESS_KEY');
-  client.secretKey = env('PAAPI_SECRET_KEY');
-  client.host = process.env.PAAPI_HOST ?? 'webservices.amazon.co.jp';
-  client.region = process.env.PAAPI_REGION ?? 'us-west-2';
-};
+const buildSigner = (): SignatureV4 =>
+  new SignatureV4({
+    service: PAAPI_SERVICE,
+    region: process.env.PAAPI_REGION ?? 'us-west-2',
+    credentials: {
+      accessKeyId: env('PAAPI_ACCESS_KEY'),
+      secretAccessKey: env('PAAPI_SECRET_KEY'),
+    },
+    sha256: Hash.bind(null, 'sha256'),
+  });
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
@@ -35,50 +58,80 @@ const RETRYABLE_NETWORK_CODES = new Set([
 ]);
 
 export const isRetryable = (err: unknown): boolean => {
-  const e = err as { status?: number; code?: string };
-  if (typeof e.status === 'number') {
-    if (e.status === 429) return true;
-    if (e.status >= 500 && e.status < 600) return true;
+  const e = err as { status?: number; code?: string; response?: { status?: number } };
+  const status = e.response?.status ?? e.status;
+  if (typeof status === 'number') {
+    if (status === 429) return true;
+    if (status >= 500 && status < 600) return true;
     return false;
   }
   return typeof e.code === 'string' && RETRYABLE_NETWORK_CODES.has(e.code);
 };
 
-const getItemsOnce = async (asins: string[]): Promise<ProductInfo[]> => {
-  if (asins.length === 0) return [];
-  configureClient();
-  const api = new paapi.DefaultApi();
-  const request = new paapi.GetItemsRequest();
-  request.PartnerTag = env('PAAPI_PARTNER_TAG');
-  request.PartnerType = 'Associates';
-  request.Marketplace = 'www.amazon.co.jp';
-  request.ItemIds = asins;
-  request.Resources = [
-    'Images.Primary.Medium',
-    'ItemInfo.Title',
-    'Offers.Listings.Price',
-  ];
-
-  const response = await new Promise<paapi.GetItemsResponse>((resolve, reject) => {
-    api.getItems(request, (error, data) => {
-      if (error) reject(error instanceof Error ? error : new Error(String(error)));
-      else if (!data) reject(new Error('PA-API returned empty response'));
-      else resolve(data);
-    });
+const buildBody = (asins: string[]): string =>
+  JSON.stringify({
+    PartnerTag: env('PAAPI_PARTNER_TAG'),
+    PartnerType: 'Associates',
+    Marketplace: 'www.amazon.co.jp',
+    ItemIds: asins,
+    Resources: ['Images.Primary.Medium', 'ItemInfo.Title', 'Offers.Listings.Price'],
+    Operation: 'GetItems',
   });
 
+const sendSigned = async (host: string, body: string): Promise<PaapiResponse> => {
+  const url = `https://${host}${PAAPI_PATH}`;
+  try {
+    const signer = buildSigner();
+    const request = new HttpRequest({
+      protocol: 'https:',
+      hostname: host,
+      method: 'POST',
+      path: PAAPI_PATH,
+      headers: {
+        'content-type': 'application/json; charset=utf-8',
+        'content-encoding': 'amz-1.0',
+        'x-amz-target': PAAPI_TARGET,
+        host,
+      },
+      body,
+    });
+    const signed = await signer.sign(request);
+    const res = await axios.post<PaapiResponse>(url, body, {
+      headers: signed.headers as Record<string, string>,
+      timeout: 30_000,
+    });
+    return res.data;
+  } catch (err) {
+    if (err instanceof AxiosError) {
+      const status = err.response?.status;
+      const wrapped = new Error(
+        status
+          ? `PA-API request failed (status ${status})`
+          : 'PA-API network error',
+      );
+      if (typeof status === 'number') {
+        (wrapped as { status?: number }).status = status;
+      } else if (err.code) {
+        (wrapped as { code?: string }).code = err.code;
+      }
+      throw wrapped;
+    }
+    throw err;
+  }
+};
+
+const parseProducts = (response: PaapiResponse): ProductInfo[] => {
   if (response.Errors && response.Errors.length > 0) {
     const codes = response.Errors.map((e) => e.Code);
     logger.warn('paapi', 'partial errors', { codes, count: codes.length });
   }
-
   const items = response.ItemsResult?.Items ?? [];
   return items
     .map((item): ProductInfo | null => {
       const title = item.ItemInfo?.Title?.DisplayValue;
-      const imageUrl = item.Images?.Primary?.Medium?.URL;
       const detailUrl = item.DetailPageURL;
       const price = item.Offers?.Listings?.[0]?.Price?.Amount;
+      const imageUrl = item.Images?.Primary?.Medium?.URL;
       if (!title || !detailUrl || typeof price !== 'number') return null;
       return {
         asin: item.ASIN,
@@ -89,6 +142,14 @@ const getItemsOnce = async (asins: string[]): Promise<ProductInfo[]> => {
       };
     })
     .filter((p): p is ProductInfo => p !== null);
+};
+
+const getItemsOnce = async (asins: string[]): Promise<ProductInfo[]> => {
+  if (asins.length === 0) return [];
+  const host = process.env.PAAPI_HOST ?? 'webservices.amazon.co.jp';
+  const body = buildBody(asins);
+  const response = await sendSigned(host, body);
+  return parseProducts(response);
 };
 
 export const getItems = async (asins: string[], attempts = 2): Promise<ProductInfo[]> => {
