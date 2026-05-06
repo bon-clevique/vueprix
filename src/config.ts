@@ -28,6 +28,7 @@ export const X_MAX_CHARS = 280;
 export const BSKY_MAX_CHARS = 300;
 
 export const POSTED_JSON_PATH = 'data/posted.json';
+export const POST_HISTORY_PATH = 'data/post-history.jsonl';
 
 export const CLAUDE_MODEL = 'claude-sonnet-4-20250514';
 export const CLAUDE_MAX_TOKENS = 100;

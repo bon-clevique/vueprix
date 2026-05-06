@@ -57,16 +57,16 @@ jobs:
           LOG_LEVEL: info
         run: npm start
 
-      - name: Commit posted.json
+      - name: Commit posted.json + post-history
         run: |
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Action"
-          git add data/posted.json
+          git add data/posted.json data/post-history.jsonl
           if git diff --staged --quiet; then
-            echo "no posted.json changes"
+            echo "no data/* changes"
             exit 0
           fi
-          git commit -m "chore: update posted.json [skip ci]"
+          git commit -m "chore: update posted.json + post-history [skip ci]"
           for i in 1 2 3; do
             if ! git pull --rebase origin main; then
               echo "rebase failed (attempt $i)"
