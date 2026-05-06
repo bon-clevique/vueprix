@@ -40,9 +40,11 @@ export const generateReason = async (product: ProductInfo, dropPercent: number):
     logger.warn('claude', 'empty response, using fallback', { asin: product.asin });
     return FALLBACK_REASON;
   } catch (err) {
+    const status = (err as { status?: number }).status;
     logger.error('claude', 'generation failed, using fallback', {
       asin: product.asin,
-      error: err instanceof Error ? err.message : String(err),
+      status: status ?? null,
+      type: err instanceof Error ? err.constructor.name : typeof err,
     });
     return FALLBACK_REASON;
   }

@@ -78,5 +78,13 @@ export const savePosted = async (
 ): Promise<void> => {
   const abs = resolvePostedPath(filePath);
   await fs.mkdir(path.dirname(abs), { recursive: true });
-  await fs.writeFile(abs, `${JSON.stringify(posted, null, 2)}\n`, 'utf-8');
+  const tmp = `${abs}.tmp.${process.pid}.${Math.random().toString(36).slice(2, 10)}`;
+  const data = `${JSON.stringify(posted, null, 2)}\n`;
+  try {
+    await fs.writeFile(tmp, data, 'utf-8');
+    await fs.rename(tmp, abs);
+  } catch (err) {
+    await fs.rm(tmp, { force: true }).catch(() => undefined);
+    throw err;
+  }
 };

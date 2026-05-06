@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { buildPostText, type PostInput } from './poster.js';
-import { BSKY_MAX_CHARS, X_MAX_CHARS } from './config.js';
+import { buildPostText } from './format.js';
+import type { PostInput } from './types.js';
+import { BSKY_MAX_CHARS, X_MAX_CHARS } from '../config.js';
 
 const sampleInput = (overrides: Partial<PostInput['product']> = {}): PostInput => ({
   product: {

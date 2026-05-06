@@ -19,7 +19,7 @@ import {
 import { checkAsin, getDeals } from './keepa.js';
 import { logger } from './logger.js';
 import { getItems, type ProductInfo } from './paapi.js';
-import { postEverywhere, type PostInput } from './poster.js';
+import { anySucceeded, dispatch, posters, type PostInput } from './posters/index.js';
 
 interface Candidate {
   asin: string;
@@ -146,8 +146,15 @@ const main = async (): Promise<void> => {
       referencePrice: target.referencePrice,
       dropPercent: target.dropPercent,
     };
-    await postEverywhere(input);
-    posted = markAsPosted(target.asin, posted, new Date());
+    const result = await dispatch(posters, input);
+    if (anySucceeded(result)) {
+      posted = markAsPosted(target.asin, posted, new Date());
+    } else {
+      logger.warn('index', 'all posters failed, leaving asin out of cooldown', {
+        asin: target.asin,
+        result,
+      });
+    }
   }
 
   await savePosted(posted);
