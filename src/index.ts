@@ -1,4 +1,5 @@
 import 'dotenv/config';
+import { randomBytes } from 'node:crypto';
 import { generateReason } from './claude.js';
 import {
   FIXED_ASINS,
@@ -16,6 +17,7 @@ import {
   prunePosted,
   savePosted,
 } from './filter.js';
+import { appendHistory } from './history.js';
 import { checkAsin, getDeals } from './keepa.js';
 import { logger } from './logger.js';
 import { getItems, type ProductInfo } from './paapi.js';
@@ -93,9 +95,16 @@ const dedupe = (candidates: Candidate[]): Candidate[] => {
   return result;
 };
 
+const isDryRunFlag = (): boolean => (process.env.DRY_RUN ?? 'true').toLowerCase() !== 'false';
+
 const main = async (): Promise<void> => {
   const startedAt = new Date();
-  logger.info('index', 'run started', { startedAt: startedAt.toISOString(), dryRun: process.env.DRY_RUN ?? 'true' });
+  const runId = `${startedAt.getTime()}-${randomBytes(2).toString('hex')}`;
+  logger.info('index', 'run started', {
+    startedAt: startedAt.toISOString(),
+    runId,
+    dryRun: process.env.DRY_RUN ?? 'true',
+  });
 
   const dealCandidates = await collectDeals();
   const fixedCandidates = await collectFixed();
@@ -147,6 +156,19 @@ const main = async (): Promise<void> => {
       dropPercent: target.dropPercent,
     };
     const result = await dispatch(posters, input);
+    await appendHistory({
+      timestamp: new Date().toISOString(),
+      runId,
+      asin: target.asin,
+      title: product.title,
+      currentPrice: product.currentPrice,
+      referencePrice: target.referencePrice,
+      dropPercent: target.dropPercent,
+      source: target.source,
+      reason,
+      dryRun: isDryRunFlag(),
+      posters: result,
+    });
     if (anySucceeded(result)) {
       posted = markAsPosted(target.asin, posted, new Date());
     } else {
