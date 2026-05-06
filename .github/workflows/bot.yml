@@ -62,7 +62,24 @@ jobs:
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Action"
           git add data/posted.json
-          if ! git diff --staged --quiet; then
-            git commit -m "chore: update posted.json [skip ci]"
-            git push
+          if git diff --staged --quiet; then
+            echo "no posted.json changes"
+            exit 0
           fi
+          git commit -m "chore: update posted.json [skip ci]"
+          for i in 1 2 3; do
+            if ! git pull --rebase origin main; then
+              echo "rebase failed (attempt $i)"
+              git rebase --abort 2>/dev/null || true
+              sleep 2
+              continue
+            fi
+            if git push; then
+              echo "push succeeded on attempt $i"
+              exit 0
+            fi
+            echo "push rejected (attempt $i), retrying"
+            sleep 2
+          done
+          echo "push failed after 3 attempts" >&2
+          exit 1

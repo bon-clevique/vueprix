@@ -136,4 +136,14 @@ describe('loadPosted / savePosted', () => {
     const result = await loadPosted(tmpFile);
     expect(result).toEqual({});
   });
+
+  it('overwrites existing data atomically (no tmp file remains on success)', async () => {
+    await savePosted({ A: '2026-05-06T00:00:00.000Z' }, tmpFile);
+    await savePosted({ B: '2026-05-06T01:00:00.000Z' }, tmpFile);
+    const result = await loadPosted(tmpFile);
+    expect(result).toEqual({ B: '2026-05-06T01:00:00.000Z' });
+    const entries = await fs.readdir(tmpDir);
+    const tmpLeftovers = entries.filter((e) => e.includes('.tmp.'));
+    expect(tmpLeftovers).toEqual([]);
+  });
 });

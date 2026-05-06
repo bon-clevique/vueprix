@@ -23,7 +23,28 @@ const configureClient = (): void => {
   client.region = process.env.PAAPI_REGION ?? 'us-west-2';
 };
 
-export const getItems = async (asins: string[]): Promise<ProductInfo[]> => {
+const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
+
+const RETRYABLE_NETWORK_CODES = new Set([
+  'ENOTFOUND',
+  'ECONNRESET',
+  'ETIMEDOUT',
+  'ECONNREFUSED',
+  'EAI_AGAIN',
+  'EPIPE',
+]);
+
+export const isRetryable = (err: unknown): boolean => {
+  const e = err as { status?: number; code?: string };
+  if (typeof e.status === 'number') {
+    if (e.status === 429) return true;
+    if (e.status >= 500 && e.status < 600) return true;
+    return false;
+  }
+  return typeof e.code === 'string' && RETRYABLE_NETWORK_CODES.has(e.code);
+};
+
+const getItemsOnce = async (asins: string[]): Promise<ProductInfo[]> => {
   if (asins.length === 0) return [];
   configureClient();
   const api = new paapi.DefaultApi();
@@ -47,7 +68,8 @@ export const getItems = async (asins: string[]): Promise<ProductInfo[]> => {
   });
 
   if (response.Errors && response.Errors.length > 0) {
-    logger.warn('paapi', 'partial errors', { errors: response.Errors });
+    const codes = response.Errors.map((e) => e.Code);
+    logger.warn('paapi', 'partial errors', { codes, count: codes.length });
   }
 
   const items = response.ItemsResult?.Items ?? [];
@@ -67,4 +89,30 @@ export const getItems = async (asins: string[]): Promise<ProductInfo[]> => {
       };
     })
     .filter((p): p is ProductInfo => p !== null);
+};
+
+export const getItems = async (asins: string[], attempts = 2): Promise<ProductInfo[]> => {
+  let lastErr: unknown = null;
+  for (let i = 0; i < attempts; i++) {
+    try {
+      return await getItemsOnce(asins);
+    } catch (err) {
+      lastErr = err;
+      if (!isRetryable(err)) throw err;
+      if (i < attempts - 1) {
+        const delay = i === 0 ? 1000 : 3000;
+        const status = (err as { status?: number; code?: string }).status;
+        const code = (err as { status?: number; code?: string }).code;
+        logger.warn('paapi', 'retrying after error', {
+          attempt: i + 1,
+          delayMs: delay,
+          status: status ?? null,
+          code: code ?? null,
+          type: err instanceof Error ? err.constructor.name : typeof err,
+        });
+        await sleep(delay);
+      }
+    }
+  }
+  throw lastErr instanceof Error ? lastErr : new Error('PA-API getItems failed');
 };
