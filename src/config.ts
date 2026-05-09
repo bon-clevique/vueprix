@@ -20,7 +20,7 @@ export const KEEPA_CATEGORIES: readonly number[] = [57239051, 160384011];
 export const DROP_THRESHOLD_PERCENT = 15;
 export const HISTORY_DAYS = 90;
 
-export const MAX_POSTS_PER_RUN = 3;
+export const MAX_POSTS_PER_RUN = 2;
 export const MIN_PRICE_YEN = 500;
 export const COOLDOWN_HOURS = 24;
 
