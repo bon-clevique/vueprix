@@ -141,11 +141,14 @@ const main = async (): Promise<void> => {
   }
 
   const productsByAsin = new Map(products.map((p) => [p.asin, p]));
+  let postedCount = 0;
+  let skippedCount = 0;
 
   for (const target of targets) {
     const product = productsByAsin.get(target.asin);
     if (!product) {
       logger.warn('index', 'PA-API has no info for asin', { asin: target.asin });
+      skippedCount += 1;
       continue;
     }
     const reason = await generateReason(product, target.dropPercent);
@@ -171,6 +174,7 @@ const main = async (): Promise<void> => {
     });
     if (anySucceeded(result)) {
       posted = markAsPosted(target.asin, posted, new Date());
+      postedCount += 1;
     } else {
       logger.warn('index', 'all posters failed, leaving asin out of cooldown', {
         asin: target.asin,
@@ -182,7 +186,9 @@ const main = async (): Promise<void> => {
   await savePosted(posted);
   logger.info('index', 'run finished', {
     durationMs: Date.now() - startedAt.getTime(),
-    posted: targets.length,
+    targets: targets.length,
+    posted: postedCount,
+    skippedNoProductInfo: skippedCount,
   });
 };
 
