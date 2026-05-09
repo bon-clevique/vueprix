@@ -13,7 +13,8 @@ import type { PostHistoryEntry } from './history.js';
 //
 // 環境変数:
 //   - NOTION_API_KEY: integration の internal token
-//   - NOTION_VUEPRIX_DATA_SOURCE_ID: DB の data_source_id (URL 末尾の UUID)
+//   - NOTION_VUEPRIX_DATA_SOURCE_ID: 投稿文 DB の Database ID (URL 末尾)
+//   - NOTION_VUEPRIX_GUIDELINES_DATA_SOURCE_ID: トーンガイドライン DB の Database ID (任意)
 
 // 1 rich_text/title element 上限は Notion 側 2000 chars。安全マージンで 1900 にする。
 const NOTION_TEXT_LIMIT = 1900;
@@ -27,6 +28,112 @@ const truncate = (text: string, max = NOTION_TEXT_LIMIT): string => {
 const isConfigured = (): boolean =>
   Boolean(process.env.NOTION_API_KEY) && Boolean(process.env.NOTION_VUEPRIX_DATA_SOURCE_ID);
 
+export interface Guideline {
+  text: string;
+  tags: string[];
+}
+
+const buildClient = (): Client =>
+  new Client({
+    auth: process.env.NOTION_API_KEY,
+    notionVersion: '2026-03-11',
+  });
+
+const isGuidelinesConfigured = (): boolean =>
+  Boolean(process.env.NOTION_API_KEY) && Boolean(process.env.NOTION_VUEPRIX_GUIDELINES_DATA_SOURCE_ID);
+
+interface NotionRichText {
+  plain_text?: string;
+}
+
+interface NotionMultiSelectOption {
+  name?: string;
+}
+
+interface NotionGuidelinePropsTitle {
+  type: 'title';
+  title?: NotionRichText[];
+}
+
+interface NotionGuidelinePropsCheckbox {
+  type: 'checkbox';
+  checkbox?: boolean;
+}
+
+interface NotionGuidelinePropsMultiSelect {
+  type: 'multi_select';
+  multi_select?: NotionMultiSelectOption[];
+}
+
+type NotionGuidelineProperty =
+  | NotionGuidelinePropsTitle
+  | NotionGuidelinePropsCheckbox
+  | NotionGuidelinePropsMultiSelect
+  | { type: string };
+
+interface NotionGuidelinePage {
+  properties: Record<string, NotionGuidelineProperty>;
+}
+
+const extractTitle = (page: NotionGuidelinePage): string => {
+  const titleProp = Object.values(page.properties).find((p) => p.type === 'title') as NotionGuidelinePropsTitle | undefined;
+  if (!titleProp || !titleProp.title) return '';
+  return titleProp.title.map((t) => t.plain_text ?? '').join('').trim();
+};
+
+const extractTags = (page: NotionGuidelinePage): string[] => {
+  const tagsProp = page.properties.Tags as NotionGuidelinePropsMultiSelect | undefined;
+  if (!tagsProp || tagsProp.type !== 'multi_select' || !tagsProp.multi_select) return [];
+  return tagsProp.multi_select
+    .map((t) => t.name ?? '')
+    .filter((name): name is string => name.length > 0);
+};
+
+// vueprix トーンガイドライン DB から Active=true なルールを取得し、Title (= ルール本文) と Tags を返す。
+// Notion 未設定 / 失敗時は空配列で fail-soft (claude の system prompt 注入が省略されるだけ)。
+export const fetchActiveGuidelines = async (): Promise<Guideline[]> => {
+  if (!isGuidelinesConfigured()) {
+    logger.info('notion', 'guidelines DB not configured, skipping');
+    return [];
+  }
+  const dataSourceId = process.env.NOTION_VUEPRIX_GUIDELINES_DATA_SOURCE_ID as string;
+  try {
+    const client = buildClient();
+    // Notion API v2026-03-11: 旧 databases.query は廃止、dataSources.query に移行。
+    // Active=true で filter、最大 100 件 (Notion API の page_size 上限)。
+    const res = await client.dataSources.query({
+      data_source_id: dataSourceId,
+      filter: {
+        property: 'Active',
+        checkbox: { equals: true },
+      },
+      page_size: 100,
+    });
+    const guidelines: Guideline[] = (res.results as unknown as NotionGuidelinePage[])
+      .map((page) => ({
+        text: extractTitle(page),
+        tags: extractTags(page),
+      }))
+      .filter((g) => g.text.length > 0);
+    logger.info('notion', 'guidelines fetched', { count: guidelines.length });
+    if (guidelines.length > 20) {
+      logger.warn('notion', 'large guidelines count may inflate Claude prompt tokens', {
+        count: guidelines.length,
+      });
+    }
+    return guidelines;
+  } catch (err) {
+    const status = (err as { status?: number }).status;
+    const code = (err as { code?: string }).code;
+    logger.error('notion', 'guidelines fetch failed (continuing with empty list)', {
+      status: status ?? null,
+      code: code ?? null,
+      type: err instanceof Error ? err.constructor.name : typeof err,
+    });
+    return [];
+  }
+};
+
 export const appendPostToNotion = async (
   entry: PostHistoryEntry,
   postText: string,
@@ -39,10 +146,7 @@ export const appendPostToNotion = async (
   const bodyText = entry.dryRun ? `[DRY RUN]\n${postText}` : postText;
   // Client を local で都度生成: env 変更を即反映 + module singleton 経由のテスト分離リスクを回避。
   // 実 cron では 1 run あたり 2 件、立ち上げコスト無視できる。
-  const client = new Client({
-    auth: process.env.NOTION_API_KEY,
-    notionVersion: '2026-03-11',
-  });
+  const client = buildClient();
   try {
     await client.pages.create({
       parent: { type: 'database_id', database_id: dataSourceId },

@@ -13,7 +13,27 @@ const client = (): Anthropic => {
 
 const sanitizeTitle = (title: string): string => title.replace(/[\r\n]+/g, ' ').slice(0, 200);
 
-export const generateReason = async (product: ProductInfo, dropPercent: number): Promise<string> => {
+export interface ReasonGuideline {
+  text: string;
+  tags: string[];
+}
+
+// Tags が空の guideline は「常駐 (全カテゴリ適用)」として扱う。
+// 将来 Tags=food などでカテゴリ絞り込みしたくなったら product 側にカテゴリを乗せて filter する拡張余地あり。
+const formatGuidelines = (guidelines: ReasonGuideline[]): string[] => {
+  if (guidelines.length === 0) return [];
+  const lines: string[] = ['', '【追加ガイドライン (Notion から動的取得)】'];
+  for (const g of guidelines) {
+    lines.push(`- ${g.text}`);
+  }
+  return lines;
+};
+
+export const generateReason = async (
+  product: ProductInfo,
+  dropPercent: number,
+  guidelines: ReasonGuideline[] = [],
+): Promise<string> => {
   const prompt = [
     'あなたは「食・健康・生活の質」をテーマに小さなSNSアカウントで商品を紹介する書き手です。',
     '次の商品について「自分の生活にどう取り入れるか」を1文の日本語で書いてください。',
@@ -28,6 +48,7 @@ export const generateReason = async (product: ProductInfo, dropPercent: number):
     '【書き方】',
     '- 商品の使い方や生活シーンに触れる (朝食 / 仕事中 / 寝る前 / 来客時 / ストック など)',
     '- 一人称や「ふだん」「日々」「いつもの」など、生活への馴染ませ方を示す語があると良い',
+    ...formatGuidelines(guidelines),
     '',
     `商品名: ${sanitizeTitle(product.title)}`,
     `値下がり率: ${dropPercent}% (※本文には書かない)`,
