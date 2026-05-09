@@ -30,6 +30,7 @@ describe('parseDeal', () => {
   // current[0] = Amazon current price (yen direct), avg[0] = priceType 0 series with [day, week, month, 90day].
   const sampleItem = (overrides: Partial<KeepaDealsItem> = {}): KeepaDealsItem => ({
     asin: 'B0FVLV5C27',
+    title: '琉球ハーブティー 心 RELAX ティー 2g 10包 ×4',
     current: [1944, 1944, -1, 318527],
     avg: [
       [4118, 5080, 3876, 3476],  // priceType 0: [day, week, month, 90day]
@@ -74,5 +75,20 @@ describe('parseDeal', () => {
   it('passes asin through verbatim', () => {
     const result = parseDeal(sampleItem({ asin: 'B0XYZ12345' }));
     expect(result?.asin).toBe('B0XYZ12345');
+  });
+
+  it('extracts title from response', () => {
+    const result = parseDeal(sampleItem());
+    expect(result?.title).toMatch(/琉球ハーブティー/);
+  });
+
+  it('returns null when title is missing', () => {
+    const result = parseDeal(sampleItem({ title: undefined }));
+    expect(result).toBeNull();
+  });
+
+  it('returns null when title is empty string', () => {
+    const result = parseDeal(sampleItem({ title: '' }));
+    expect(result).toBeNull();
   });
 });

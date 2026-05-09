@@ -152,7 +152,16 @@ const getItemsOnce = async (asins: string[]): Promise<ProductInfo[]> => {
   return parseProducts(response);
 };
 
+// Optional: PA-API は credential 揃っていれば商品情報を取得して投稿テキストの精度を上げる。
+// 未設定でも Keepa 単独で投稿が組立可能 (アソシエイト本登録 → 購買実績 → PA-API 申請通過の鶏卵打破ルート)。
+export const isPaapiConfigured = (): boolean =>
+  Boolean(process.env.PAAPI_ACCESS_KEY) && Boolean(process.env.PAAPI_SECRET_KEY);
+
 export const getItems = async (asins: string[], attempts = 2): Promise<ProductInfo[]> => {
+  if (!isPaapiConfigured()) {
+    logger.info('paapi', 'PA-API credentials not set, skipping (Keepa-only mode)');
+    return [];
+  }
   let lastErr: unknown = null;
   for (let i = 0; i < attempts; i++) {
     try {
