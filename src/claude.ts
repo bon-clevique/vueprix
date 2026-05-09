@@ -40,14 +40,59 @@ export const generateReason = async (product: ProductInfo, dropPercent: number):
     logger.warn('claude', 'empty response, using fallback', { asin: product.asin });
     return FALLBACK_REASON;
   } catch (err) {
-    const status = (err as { status?: number }).status;
-    const requestId = (err as { request_id?: string }).request_id;
     logger.error('claude', 'generation failed, using fallback', {
       asin: product.asin,
-      status: status ?? null,
-      requestId: requestId ?? null,
-      type: err instanceof Error ? err.constructor.name : typeof err,
+      ...classifyAnthropicError(err),
     });
     return FALLBACK_REASON;
   }
+};
+
+interface ErrorDiagnostic {
+  status: number | null;
+  errorType: string | null;
+  category: 'credit_balance' | 'rate_limit' | 'auth' | 'bad_request' | 'server' | 'unknown';
+  requestId: string | null;
+  type: string;
+}
+
+// Anthropic SDK error を運用診断に必要な field のみに redact しつつ category を付ける。
+// err.message 全文は credit 不足以外で内部詳細を含む可能性があるため log しない。
+// credit balance 判定だけは err.message を必要最小限の substring match で利用 (機微情報ではない運用診断値)。
+export const classifyAnthropicError = (err: unknown): ErrorDiagnostic => {
+  const isApiError = err instanceof Anthropic.APIError;
+  const status = isApiError && typeof err.status === 'number' ? err.status : null;
+  // SDK の field 名は requestID (camelCase) — request_id ではない。
+  // 旧 snake_case を持つ test 互換オブジェクトの両方をサポート。
+  const requestId = isApiError
+    ? (err.requestID ?? null)
+    : (typeof (err as { request_id?: string }).request_id === 'string'
+      ? (err as { request_id: string }).request_id
+      : null);
+  // SDK の APIError には err.type (= 'invalid_request_error' 等) が直接乗る。
+  const errorType = isApiError
+    ? (err.type ?? null)
+    : (typeof (err as { error?: { error?: { type?: string } } }).error?.error?.type === 'string'
+      ? (err as { error: { error: { type: string } } }).error.error.type
+      : null);
+  const message = err instanceof Error ? err.message : '';
+
+  let category: ErrorDiagnostic['category'] = 'unknown';
+  if (err instanceof Anthropic.RateLimitError) category = 'rate_limit';
+  else if (err instanceof Anthropic.AuthenticationError || err instanceof Anthropic.PermissionDeniedError) category = 'auth';
+  else if (err instanceof Anthropic.InternalServerError) category = 'server';
+  else if (err instanceof Anthropic.BadRequestError) {
+    category = /credit balance/i.test(message) ? 'credit_balance' : 'bad_request';
+  } else if (err instanceof Anthropic.APIConnectionError) category = 'server';
+  else if (err instanceof Anthropic.NotFoundError || err instanceof Anthropic.ConflictError || err instanceof Anthropic.UnprocessableEntityError) {
+    category = 'bad_request';
+  } else if (err instanceof Anthropic.APIError) category = 'server';
+
+  return {
+    status,
+    errorType,
+    category,
+    requestId,
+    type: err instanceof Error ? err.constructor.name : typeof err,
+  };
 };
