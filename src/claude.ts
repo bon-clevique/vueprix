@@ -15,15 +15,25 @@ const sanitizeTitle = (title: string): string => title.replace(/[\r\n]+/g, ' ').
 
 export const generateReason = async (product: ProductInfo, dropPercent: number): Promise<string> => {
   const prompt = [
-    '以下の商品について、なぜ今買うべきか日本語で1文（40字以内）で説明してください。',
-    '体言止め不可。「〜がお得」「〜がおすすめ」で終わらない表現にすること。',
-    '広告っぽい表現を避け、使い手目線で書くこと。',
+    'あなたは「食・健康・生活の質」をテーマに小さなSNSアカウントで商品を紹介する書き手です。',
+    '次の商品について「自分の生活にどう取り入れるか」を1文の日本語で書いてください。',
+    '',
+    '【厳守事項】',
+    '- 38字以内 (絶対超えない)',
+    '- 体言止めにしない (動詞・助動詞で終わる)',
+    '- 値段や割引には触れない (価格は別行で表示済み)',
+    '- 次の煽り語を使わない: お得 / おすすめ / 必見 / チャンス / 今だけ / 見逃せない / 半額以下 / 必須 / マスト / 神 / 衝撃 / 超 / 激安',
+    '- 「〜がお得」「〜がおすすめ」「〜がチャンス」など、商品を主語にした押し売り構文にしない',
+    '',
+    '【書き方】',
+    '- 商品の使い方や生活シーンに触れる (朝食 / 仕事中 / 寝る前 / 来客時 / ストック など)',
+    '- 一人称や「ふだん」「日々」「いつもの」など、生活への馴染ませ方を示す語があると良い',
     '',
     `商品名: ${sanitizeTitle(product.title)}`,
-    `値下がり率: ${dropPercent}%`,
-    `現在価格: ¥${product.currentPrice.toLocaleString('ja-JP')}`,
+    `値下がり率: ${dropPercent}% (※本文には書かない)`,
+    `現在価格: ¥${product.currentPrice.toLocaleString('ja-JP')} (※本文には書かない)`,
     '',
-    '出力: 1文のみ。余分な説明不要。',
+    '出力: 1文のみ。前置き・後書き・引用符・絵文字すべて禁止。',
   ].join('\n');
 
   try {
@@ -35,6 +45,8 @@ export const generateReason = async (product: ProductInfo, dropPercent: number):
     const block = res.content[0];
     if (block && block.type === 'text') {
       const text = block.text.trim().replace(/[\r\n]+/g, ' ');
+      // プロンプトでは 38 字を希望しているが、Claude は数文字超過することがあるため
+      // 60 字 hard cap で safety net。X 280 字 / Bluesky 300 字内には十分収まる。
       if (text.length > 0) return text.slice(0, 60);
     }
     logger.warn('claude', 'empty response, using fallback', { asin: product.asin });
