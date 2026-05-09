@@ -18,16 +18,20 @@ export interface PriceHistory {
   dropPercent: number;
 }
 
+export interface KeepaDealsItem {
+  asin: string;
+  // current[priceTypeIdx]: index 0 = Amazon new price, 1 = New (3rd party), 2 = Used, ...
+  current?: number[];
+  // avg[priceTypeIdx][dateRangeIdx]: dateRange 0 = day, 1 = week, 2 = month, 3 = 90 day
+  avg?: number[][];
+  delta?: number[][];
+  deltaPercent?: number[][];
+}
+
 interface KeepaDealsResponse {
   tokensLeft?: number;
   deals?: {
-    dr?: Array<{
-      asin: string;
-      current?: number[];
-      avg?: number[];
-      delta?: number[];
-      deltaPercent?: number[];
-    }>;
+    dr?: KeepaDealsItem[];
   };
 }
 
@@ -49,9 +53,24 @@ const apiKey = (): string => {
   return key;
 };
 
-const centsToYen = (cents: number | undefined): number => {
-  if (typeof cents !== 'number' || cents < 0) return 0;
-  return Math.round(cents / 100);
+// Amazon.co.jp (Keepa domain=5) は価格を整数円で返す。-1 / -2 は「データなし」の sentinel。
+// 他 domain (US/UK 等) は cents 単位だが、本 bot は domain=5 専用のため変換は不要。
+export const toYen = (raw: number | undefined): number => {
+  if (typeof raw !== 'number' || raw < 0) return 0;
+  return raw;
+};
+
+// avg は priceType ごとの 4 値配列 ([day, week, month, 90day])。
+// referencePrice には week 平均 (index 1) を採用 — day だと一時的な変動を拾い、month/90day は古すぎるため。
+const AVG_DATERANGE_INDEX = 1;
+
+export const parseDeal = (d: KeepaDealsItem): Deal | null => {
+  const current = toYen(d.current?.[0]);
+  const avg = toYen(d.avg?.[0]?.[AVG_DATERANGE_INDEX]);
+  const dropPercent = d.deltaPercent?.[0]?.[AVG_DATERANGE_INDEX] ?? 0;
+  // ¥0 は invalid 扱い (Amazon.co.jp で ¥0 商品は事実上存在せず、sentinel と区別する必要がない)
+  if (!current || !avg) return null;
+  return { asin: d.asin, currentPrice: current, referencePrice: avg, dropPercent };
 };
 
 export const getDeals = async (categoryId: number): Promise<Deal[]> => {
@@ -82,13 +101,7 @@ export const getDeals = async (categoryId: number): Promise<Deal[]> => {
   });
   const items = res.data.deals?.dr ?? [];
   return items
-    .map((d): Deal | null => {
-      const current = centsToYen(d.current?.[0]);
-      const avg = centsToYen(d.avg?.[0]);
-      const dropPercent = d.deltaPercent?.[0] ?? 0;
-      if (!current || !avg) return null;
-      return { asin: d.asin, currentPrice: current, referencePrice: avg, dropPercent };
-    })
+    .map(parseDeal)
     .filter((d): d is Deal => d !== null);
 };
 
@@ -104,9 +117,9 @@ export const checkAsin = async (asin: string): Promise<PriceHistory | null> => {
   });
   const product = res.data.products?.[0];
   if (!product?.stats) return null;
-  const current = centsToYen(product.stats.current?.[0]);
+  const current = toYen(product.stats.current?.[0]);
   const minEntry = product.stats.min?.[0];
-  const min90 = minEntry ? centsToYen(minEntry[1]) : 0;
+  const min90 = minEntry ? toYen(minEntry[1]) : 0;
   if (!current || !min90) return null;
   // 「過去90日最安値を更に下回るほどの大下落」を表す。current >= min90 の通常時は 0 以下となり、
   // 後続 isGoodDeal(current, min90) で投稿対象から除外される。
