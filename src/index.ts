@@ -1,6 +1,7 @@
 import 'dotenv/config';
 import { randomBytes } from 'node:crypto';
 import { buildAffiliateUrl, requirePartnerTag } from './affiliate.js';
+import { loadBlocklist } from './blocklist.js';
 import { generateReason } from './claude.js';
 import {
   FIXED_ASINS,
@@ -22,7 +23,7 @@ import {
 import { appendHistory } from './history.js';
 import { checkAsin, getDeals } from './keepa.js';
 import { logger } from './logger.js';
-import { appendPostToNotion } from './notion.js';
+import { appendPostToNotion, fetchActiveGuidelines } from './notion.js';
 import { getItems, type ProductInfo } from './paapi.js';
 import { anySucceeded, buildPostText, dispatch, posters, type PostInput } from './posters/index.js';
 
@@ -123,6 +124,13 @@ const main = async (): Promise<void> => {
     dryRun: process.env.DRY_RUN ?? 'true',
   });
 
+  // Notion 由来の動的ガイドラインと git 管理の blocklist を main 冒頭で並列取得。
+  // 失敗時は両方とも空コレクションで継続 (fail-soft)。
+  const [blocklist, guidelines] = await Promise.all([
+    loadBlocklist(),
+    fetchActiveGuidelines(),
+  ]);
+
   const dealCandidates = await collectDeals();
   const fixedCandidates = await collectFixed();
   logger.info('index', 'candidates collected', {
@@ -134,12 +142,15 @@ const main = async (): Promise<void> => {
   posted = prunePosted(posted, startedAt);
 
   const merged = dedupe([...fixedCandidates, ...dealCandidates]);
-  const filtered = merged.filter((c) => !isAlreadyPosted(c.asin, posted, startedAt));
+  const afterBlocklist = merged.filter((c) => !blocklist.has(c.asin));
+  const filtered = afterBlocklist.filter((c) => !isAlreadyPosted(c.asin, posted, startedAt));
   const targets = filtered.slice(0, MAX_POSTS_PER_RUN);
   logger.info('index', 'targets selected', {
     afterDedupe: merged.length,
+    afterBlocklist: afterBlocklist.length,
     afterCooldown: filtered.length,
     willPost: targets.length,
+    guidelines: guidelines.length,
   });
 
   if (targets.length === 0) {
@@ -167,7 +178,7 @@ const main = async (): Promise<void> => {
     if (!paapiByAsin.has(target.asin)) {
       fallbackCount += 1;
     }
-    const reason = await generateReason(product, target.dropPercent);
+    const reason = await generateReason(product, target.dropPercent, guidelines);
     const input: PostInput = {
       product,
       reason,
