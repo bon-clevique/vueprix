@@ -6,6 +6,8 @@ name: vueprix-bot
 #   ANTHROPIC_API_KEY
 #   X_API_KEY, X_API_SECRET, X_ACCESS_TOKEN, X_ACCESS_TOKEN_SECRET
 #   BSKY_IDENTIFIER (or hardcode below), BSKY_PASSWORD
+#   NOTION_API_KEY (optional; 投稿文を Notion DB に集約する場合のみ)
+#   NOTION_VUEPRIX_DATA_SOURCE_ID (optional; Notion DB の data_source_id)
 
 on:
   schedule:
@@ -53,6 +55,8 @@ jobs:
           X_ACCESS_TOKEN_SECRET: ${{ secrets.X_ACCESS_TOKEN_SECRET }}
           BSKY_IDENTIFIER: ${{ secrets.BSKY_IDENTIFIER }}
           BSKY_PASSWORD: ${{ secrets.BSKY_PASSWORD }}
+          NOTION_API_KEY: ${{ secrets.NOTION_API_KEY }}
+          NOTION_VUEPRIX_DATA_SOURCE_ID: ${{ secrets.NOTION_VUEPRIX_DATA_SOURCE_ID }}
           DRY_RUN: ${{ github.event.inputs.dry_run || 'true' }}
           LOG_LEVEL: info
         run: npm start

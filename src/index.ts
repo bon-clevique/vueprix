@@ -8,6 +8,7 @@ import {
   MAX_POSTS_PER_RUN,
   MIN_PRICE_YEN,
   DROP_THRESHOLD_PERCENT,
+  X_MAX_CHARS,
 } from './config.js';
 import {
   calcDropPercent,
@@ -21,8 +22,9 @@ import {
 import { appendHistory } from './history.js';
 import { checkAsin, getDeals } from './keepa.js';
 import { logger } from './logger.js';
+import { appendPostToNotion } from './notion.js';
 import { getItems, type ProductInfo } from './paapi.js';
-import { anySucceeded, dispatch, posters, type PostInput } from './posters/index.js';
+import { anySucceeded, buildPostText, dispatch, posters, type PostInput } from './posters/index.js';
 
 interface Candidate {
   asin: string;
@@ -173,7 +175,7 @@ const main = async (): Promise<void> => {
       dropPercent: target.dropPercent,
     };
     const result = await dispatch(posters, input);
-    await appendHistory({
+    const historyEntry = {
       timestamp: new Date().toISOString(),
       runId,
       asin: target.asin,
@@ -185,7 +187,10 @@ const main = async (): Promise<void> => {
       reason,
       dryRun: isDryRunFlag(),
       posters: result,
-    });
+    };
+    await appendHistory(historyEntry);
+    const postText = buildPostText(input, X_MAX_CHARS);
+    await appendPostToNotion(historyEntry, postText);
     if (anySucceeded(result)) {
       posted = markAsPosted(target.asin, posted, new Date());
       postedCount += 1;
