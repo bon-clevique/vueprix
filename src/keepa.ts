@@ -6,6 +6,7 @@ const KEEPA_BASE = 'https://api.keepa.com';
 
 export interface Deal {
   asin: string;
+  title: string;
   currentPrice: number;
   referencePrice: number;
   dropPercent: number;
@@ -13,6 +14,7 @@ export interface Deal {
 
 export interface PriceHistory {
   asin: string;
+  title: string;
   currentPrice: number;
   minPrice90d: number;
   dropPercent: number;
@@ -20,6 +22,7 @@ export interface PriceHistory {
 
 export interface KeepaDealsItem {
   asin: string;
+  title?: string;
   // current[priceTypeIdx]: index 0 = Amazon new price, 1 = New (3rd party), 2 = Used, ...
   current?: number[];
   // avg[priceTypeIdx][dateRangeIdx]: dateRange 0 = day, 1 = week, 2 = month, 3 = 90 day
@@ -39,6 +42,7 @@ interface KeepaProductResponse {
   tokensLeft?: number;
   products?: Array<{
     asin: string;
+    title?: string;
     stats?: {
       current?: number[];
       min?: Array<[number, number]>;
@@ -68,9 +72,14 @@ export const parseDeal = (d: KeepaDealsItem): Deal | null => {
   const current = toYen(d.current?.[0]);
   const avg = toYen(d.avg?.[0]?.[AVG_DATERANGE_INDEX]);
   const dropPercent = d.deltaPercent?.[0]?.[AVG_DATERANGE_INDEX] ?? 0;
+  const title = typeof d.title === 'string' && d.title.length > 0 ? d.title : '';
   // ¥0 は invalid 扱い (Amazon.co.jp で ¥0 商品は事実上存在せず、sentinel と区別する必要がない)
-  if (!current || !avg) return null;
-  return { asin: d.asin, currentPrice: current, referencePrice: avg, dropPercent };
+  // title 空も invalid (投稿テキストを組み立てられないため)
+  if (!current || !avg || !title) {
+    logger.debug('keepa', 'parseDeal dropped', { asin: d.asin, hasCurrent: !!current, hasAvg: !!avg, hasTitle: !!title });
+    return null;
+  }
+  return { asin: d.asin, title, currentPrice: current, referencePrice: avg, dropPercent };
 };
 
 export const getDeals = async (categoryId: number): Promise<Deal[]> => {
@@ -121,8 +130,13 @@ export const checkAsin = async (asin: string): Promise<PriceHistory | null> => {
   const minEntry = product.stats.min?.[0];
   const min90 = minEntry ? toYen(minEntry[1]) : 0;
   if (!current || !min90) return null;
+  const title = typeof product.title === 'string' && product.title.length > 0 ? product.title : '';
+  if (!title) {
+    logger.debug('keepa', 'checkAsin dropped (no title)', { asin });
+    return null;
+  }
   // 「過去90日最安値を更に下回るほどの大下落」を表す。current >= min90 の通常時は 0 以下となり、
   // 後続 isGoodDeal(current, min90) で投稿対象から除外される。
   const dropPercent = Math.max(0, Math.round(((min90 - current) / min90) * 100));
-  return { asin, currentPrice: current, minPrice90d: min90, dropPercent };
+  return { asin, title, currentPrice: current, minPrice90d: min90, dropPercent };
 };

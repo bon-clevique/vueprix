@@ -1,5 +1,6 @@
 import 'dotenv/config';
 import { randomBytes } from 'node:crypto';
+import { buildAffiliateUrl, requirePartnerTag } from './affiliate.js';
 import { generateReason } from './claude.js';
 import {
   FIXED_ASINS,
@@ -25,11 +26,20 @@ import { anySucceeded, dispatch, posters, type PostInput } from './posters/index
 
 interface Candidate {
   asin: string;
+  title: string;
   currentPrice: number;
   referencePrice: number;
   dropPercent: number;
   source: 'deals' | 'fixed';
 }
+
+const buildKeepaProduct = (c: Candidate, partnerTag: string): ProductInfo => ({
+  asin: c.asin,
+  title: c.title,
+  imageUrl: '',
+  currentPrice: c.currentPrice,
+  affiliateUrl: buildAffiliateUrl(c.asin, partnerTag),
+});
 
 const collectDeals = async (): Promise<Candidate[]> => {
   const candidates: Candidate[] = [];
@@ -41,6 +51,7 @@ const collectDeals = async (): Promise<Candidate[]> => {
         if (!isGoodDeal(d.currentPrice, d.referencePrice)) continue;
         candidates.push({
           asin: d.asin,
+          title: d.title,
           currentPrice: d.currentPrice,
           referencePrice: d.referencePrice,
           dropPercent: calcDropPercent(d.currentPrice, d.referencePrice),
@@ -69,6 +80,7 @@ const collectFixed = async (): Promise<Candidate[]> => {
       }
       candidates.push({
         asin,
+        title: history.title,
         currentPrice: history.currentPrice,
         referencePrice: history.minPrice90d,
         dropPercent: history.dropPercent,
@@ -100,6 +112,9 @@ const isDryRunFlag = (): boolean => (process.env.DRY_RUN ?? 'true').toLowerCase(
 const main = async (): Promise<void> => {
   const startedAt = new Date();
   const runId = `${startedAt.getTime()}-${randomBytes(2).toString('hex')}`;
+  // PartnerTag は本 bot の前提条件 (Amazon アソシエイト本登録 = 最低限必要)。
+  // 早期 fail で「Keepa token を消費する前に deployment 設定誤りを検知」する意図で main 冒頭で validate。
+  const partnerTag = requirePartnerTag();
   logger.info('index', 'run started', {
     startedAt: startedAt.toISOString(),
     runId,
@@ -131,25 +146,24 @@ const main = async (): Promise<void> => {
     return;
   }
 
-  let products: ProductInfo[] = [];
+  // PA-API がある場合は最優先、なければ Keepa 由来 ProductInfo で続行
+  let paapiProducts: ProductInfo[] = [];
   try {
-    products = await getItems(targets.map((t) => t.asin));
+    paapiProducts = await getItems(targets.map((t) => t.asin));
   } catch (err) {
-    logger.error('index', 'PA-API getItems failed', {
+    logger.warn('index', 'PA-API getItems failed, falling back to Keepa-only', {
       error: err instanceof Error ? err.message : String(err),
     });
   }
 
-  const productsByAsin = new Map(products.map((p) => [p.asin, p]));
+  const paapiByAsin = new Map(paapiProducts.map((p) => [p.asin, p]));
   let postedCount = 0;
-  let skippedCount = 0;
+  let fallbackCount = 0;
 
   for (const target of targets) {
-    const product = productsByAsin.get(target.asin);
-    if (!product) {
-      logger.warn('index', 'PA-API has no info for asin', { asin: target.asin });
-      skippedCount += 1;
-      continue;
+    const product = paapiByAsin.get(target.asin) ?? buildKeepaProduct(target, partnerTag);
+    if (!paapiByAsin.has(target.asin)) {
+      fallbackCount += 1;
     }
     const reason = await generateReason(product, target.dropPercent);
     const input: PostInput = {
@@ -188,7 +202,7 @@ const main = async (): Promise<void> => {
     durationMs: Date.now() - startedAt.getTime(),
     targets: targets.length,
     posted: postedCount,
-    skippedNoProductInfo: skippedCount,
+    keepaFallback: fallbackCount,
   });
 };
 
