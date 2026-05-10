@@ -2,6 +2,7 @@ import 'dotenv/config';
 import { randomBytes } from 'node:crypto';
 import { buildAffiliateUrl, requirePartnerTag } from './affiliate.js';
 import { loadBlocklist } from './blocklist.js';
+import { CATEGORY_FIXED, mapKeepaCategoryToNotion, type NotionCategory } from './category.js';
 import { generateReason } from './claude.js';
 import {
   FIXED_ASINS,
@@ -34,6 +35,7 @@ interface Candidate {
   referencePrice: number;
   dropPercent: number;
   source: 'deals' | 'fixed';
+  category: NotionCategory;
 }
 
 const buildKeepaProduct = (c: Candidate, partnerTag: string): ProductInfo => ({
@@ -49,6 +51,7 @@ const collectDeals = async (): Promise<Candidate[]> => {
   for (const categoryId of KEEPA_CATEGORIES) {
     try {
       const deals = await getDeals(categoryId);
+      const category = mapKeepaCategoryToNotion(categoryId);
       for (const d of deals) {
         if (d.currentPrice < MIN_PRICE_YEN) continue;
         if (!isGoodDeal(d.currentPrice, d.referencePrice)) continue;
@@ -59,6 +62,7 @@ const collectDeals = async (): Promise<Candidate[]> => {
           referencePrice: d.referencePrice,
           dropPercent: calcDropPercent(d.currentPrice, d.referencePrice),
           source: 'deals',
+          category,
         });
       }
     } catch (err) {
@@ -88,6 +92,7 @@ const collectFixed = async (): Promise<Candidate[]> => {
         referencePrice: history.minPrice90d,
         dropPercent: history.dropPercent,
         source: 'fixed',
+        category: CATEGORY_FIXED,
       });
     } catch (err) {
       logger.error('index', 'checkAsin failed', {
@@ -195,6 +200,7 @@ const main = async (): Promise<void> => {
       referencePrice: target.referencePrice,
       dropPercent: target.dropPercent,
       source: target.source,
+      category: target.category,
       reason,
       dryRun: isDryRunFlag(),
       posters: result,

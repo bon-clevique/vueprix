@@ -1,5 +1,6 @@
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
+import type { NotionCategory } from './category.js';
 import { POST_HISTORY_PATH } from './config.js';
 import { logger } from './logger.js';
 
@@ -12,6 +13,7 @@ export interface PostHistoryEntry {
   referencePrice: number;
   dropPercent: number;
   source: 'deals' | 'fixed';
+  category: NotionCategory;
   reason: string;
   dryRun: boolean;
   posters: Record<string, boolean>;

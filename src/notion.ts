@@ -1,4 +1,5 @@
 import { Client } from '@notionhq/client';
+import { buildAffiliateUrl } from './affiliate.js';
 import { logger } from './logger.js';
 import type { PostHistoryEntry } from './history.js';
 
@@ -27,6 +28,11 @@ const truncate = (text: string, max = NOTION_TEXT_LIMIT): string => {
 
 const isConfigured = (): boolean =>
   Boolean(process.env.NOTION_API_KEY) && Boolean(process.env.NOTION_VUEPRIX_DATA_SOURCE_ID);
+
+// サクラチェッカー (Amazon レビュー信頼性チェック) は ASIN ベースの URL で検索結果ページに直接遷移できる。
+// 査読時に「やらせレビュー疑惑がないか」をワンクリックで確認するための補助 URL。
+const buildSakuraCheckerUrl = (asin: string): string =>
+  `https://sakura-checker.jp/search/${encodeURIComponent(asin)}/`;
 
 export interface Guideline {
   text: string;
@@ -143,6 +149,9 @@ export const appendPostToNotion = async (
     return;
   }
   const dataSourceId = process.env.NOTION_VUEPRIX_DATA_SOURCE_ID as string;
+  // PAAPI_PARTNER_TAG は main 起動時に requirePartnerTag() で validate 済 (src/index.ts)。
+  // ここでは fail-soft 扱い: 未設定なら Amazon URL property は null をセット (Notion API は url: null 許容)。
+  const partnerTag = process.env.PAAPI_PARTNER_TAG ?? '';
   const bodyText = entry.dryRun ? `[DRY RUN]\n${postText}` : postText;
   // Client を local で都度生成: env 変更を即反映 + module singleton 経由のテスト分離リスクを回避。
   // 実 cron では 1 run あたり 2 件、立ち上げコスト無視できる。
@@ -157,9 +166,21 @@ export const appendPostToNotion = async (
         '理由': {
           rich_text: [{ type: 'text', text: { content: truncate(entry.reason) } }],
         },
-        DryRun: {
-          checkbox: entry.dryRun,
+        ASIN: {
+          rich_text: [{ type: 'text', text: { content: entry.asin } }],
         },
+        'Amazon URL': partnerTag
+          ? { url: buildAffiliateUrl(entry.asin, partnerTag) }
+          : { url: null },
+        '通常価格': { number: entry.referencePrice },
+        'セール価格': { number: entry.currentPrice },
+        // Notion percent property は 0.59 = 59% として表示するため、整数 percent を 100 で割る。
+        '割引率': { number: entry.dropPercent / 100 },
+        'カテゴリ': { select: { name: entry.category } },
+        'サクラチェッカーURL': { url: buildSakuraCheckerUrl(entry.asin) },
+        '候補生成日時': { date: { start: entry.timestamp } },
+        Status: { select: { name: 'pending_review' } },
+        DryRun: { checkbox: entry.dryRun },
       },
       children: [
         {
@@ -171,7 +192,7 @@ export const appendPostToNotion = async (
         },
       ],
     });
-    logger.info('notion', 'page appended', { asin: entry.asin });
+    logger.info('notion', 'page appended', { asin: entry.asin, category: entry.category });
   } catch (err) {
     const status = (err as { status?: number }).status;
     const code = (err as { code?: string }).code;
