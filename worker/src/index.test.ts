@@ -54,24 +54,27 @@ describe('timingSafeEqual', () => {
 });
 
 describe('webhook proxy fetch handler', () => {
-  let fetchSpy: ReturnType<typeof vi.spyOn<typeof globalThis, 'fetch'>>;
+  const originalFetch = globalThis.fetch;
+  let fetchMock: ReturnType<typeof vi.fn>;
 
   beforeEach(() => {
-    fetchSpy = vi.spyOn(globalThis, 'fetch');
+    fetchMock = vi.fn();
     // default: throw to surface unmocked outbound calls in non-happy-path tests
-    fetchSpy.mockImplementation(() => {
+    fetchMock.mockImplementation(() => {
       throw new Error('unmocked fetch call');
     });
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
   });
 
   afterEach(() => {
+    globalThis.fetch = originalFetch;
     vi.restoreAllMocks();
   });
 
   it('rejects non-POST methods with 405', async () => {
     const res = await handler.fetch(buildReq({ method: 'GET' }), buildEnv());
     expect(res.status).toBe(405);
-    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it('rejects missing X-Notion-Secret header with 401', async () => {
@@ -80,7 +83,7 @@ describe('webhook proxy fetch handler', () => {
       buildEnv(),
     );
     expect(res.status).toBe(401);
-    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it('rejects mismatched X-Notion-Secret header with 401', async () => {
@@ -89,7 +92,7 @@ describe('webhook proxy fetch handler', () => {
       buildEnv(),
     );
     expect(res.status).toBe(401);
-    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it('rejects malformed JSON with 400', async () => {
@@ -99,7 +102,7 @@ describe('webhook proxy fetch handler', () => {
     );
     expect(res.status).toBe(400);
     expect(await res.text()).toBe('Invalid JSON');
-    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it('rejects empty page_id with 400', async () => {
@@ -108,7 +111,7 @@ describe('webhook proxy fetch handler', () => {
       buildEnv(),
     );
     expect(res.status).toBe(400);
-    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it('rejects non-UUID page_id with 400', async () => {
@@ -120,7 +123,7 @@ describe('webhook proxy fetch handler', () => {
       buildEnv(),
     );
     expect(res.status).toBe(400);
-    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it('rejects non-string page_id with 400', async () => {
@@ -129,11 +132,11 @@ describe('webhook proxy fetch handler', () => {
       buildEnv(),
     );
     expect(res.status).toBe(400);
-    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it('accepts dashed UUID, fires repository_dispatch, returns 202', async () => {
-    fetchSpy.mockResolvedValueOnce(new Response(null, { status: 204 }));
+    fetchMock.mockResolvedValueOnce(new Response(null, { status: 204 }));
 
     const res = await handler.fetch(
       buildReq({
@@ -145,9 +148,9 @@ describe('webhook proxy fetch handler', () => {
 
     expect(res.status).toBe(202);
     expect(await res.json()).toEqual({ ok: true, page_id: VALID_PAGE_ID });
-    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
 
-    const [url, init] = fetchSpy.mock.calls[0]!;
+    const [url, init] = fetchMock.mock.calls[0]!;
     expect(url).toBe(
       'https://api.github.com/repos/bon-clevique/vueprix/dispatches',
     );
@@ -164,7 +167,7 @@ describe('webhook proxy fetch handler', () => {
   });
 
   it('accepts dash-less UUID and forwards it verbatim', async () => {
-    fetchSpy.mockResolvedValueOnce(new Response(null, { status: 204 }));
+    fetchMock.mockResolvedValueOnce(new Response(null, { status: 204 }));
 
     const res = await handler.fetch(
       buildReq({
@@ -175,8 +178,8 @@ describe('webhook proxy fetch handler', () => {
     );
 
     expect(res.status).toBe(202);
-    expect(fetchSpy).toHaveBeenCalledTimes(1);
-    const reqInit = fetchSpy.mock.calls[0]![1] as RequestInit;
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const reqInit = fetchMock.mock.calls[0]![1] as RequestInit;
     expect(JSON.parse(reqInit.body as string)).toEqual({
       event_type: 'vueprix-publish',
       client_payload: { page_id: VALID_PAGE_ID_NODASH },
@@ -185,7 +188,7 @@ describe('webhook proxy fetch handler', () => {
 
   it('returns 502 when GitHub responds non-2xx', async () => {
     const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
-    fetchSpy.mockResolvedValueOnce(
+    fetchMock.mockResolvedValueOnce(
       new Response('service unavailable', { status: 503 }),
     );
 
