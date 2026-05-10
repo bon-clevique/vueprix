@@ -270,9 +270,45 @@ describe('fetchPageById', () => {
       referencePrice: 1000,
       dropPercent: 15,
       category: 'food',
-      status: 'approved',
       dryRun: false,
     });
+  });
+
+  it('throws on unknown Status value (membership check via type guard)', async () => {
+    pagesRetrieveMock.mockResolvedValueOnce(buildPage('weird_value'));
+    const { fetchPageById } = await import('./notion.js');
+    await expect(fetchPageById('page-1')).rejects.toThrow(/not a known Status value/);
+  });
+
+  it('throws on empty Status value', async () => {
+    pagesRetrieveMock.mockResolvedValueOnce({
+      id: 'page-1',
+      properties: {
+        Status: { select: null },
+        ASIN: { rich_text: [{ plain_text: 'B0FKL' }] },
+        '名前': { title: [{ plain_text: 'x' }] },
+        '投稿文_X': { rich_text: [{ plain_text: '' }] },
+        '投稿文_Bluesky': { rich_text: [{ plain_text: '' }] },
+        '理由': { rich_text: [{ plain_text: '' }] },
+        'Amazon URL': { url: null },
+        'セール価格': { number: 0 },
+        '通常価格': { number: 0 },
+        '割引率': { number: 0 },
+        'カテゴリ': { select: { name: 'food' } },
+        DryRun: { checkbox: false },
+      },
+    });
+    const { fetchPageById } = await import('./notion.js');
+    await expect(fetchPageById('page-1')).rejects.toThrow(/not a known Status value/);
+  });
+
+  it('falls back to fixed-list when category is unknown', async () => {
+    pagesRetrieveMock.mockResolvedValueOnce(
+      buildPage('approved', { 'カテゴリ': { select: { name: 'unknown_category' } } }),
+    );
+    const { fetchPageById } = await import('./notion.js');
+    const payload = await fetchPageById('page-1');
+    expect(payload.category).toBe('fixed-list');
   });
 
   it('throws when Status is not approved (e.g. pending_review)', async () => {
@@ -362,6 +398,24 @@ describe('queryDuplicateAsins', () => {
     const secondArg = dataSourcesQueryMock.mock.calls[1]?.[0] as { start_cursor?: string };
     expect(secondArg.start_cursor).toBe('cursor-2');
   });
+
+  it('warns when MAX_QUERY_PAGES cap is reached (has_more still true after final page)', async () => {
+    // 全 10 page で has_more=true を返し続けるケース → cap hit。
+    dataSourcesQueryMock.mockResolvedValue({
+      results: [{ id: 'p', properties: { ASIN: { rich_text: [{ plain_text: 'B999' }] } } }],
+      has_more: true,
+      next_cursor: 'next',
+    });
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const { queryDuplicateAsins } = await import('./notion.js');
+    await queryDuplicateAsins(new Date());
+    // MAX_QUERY_PAGES = 10 page まで叩いて止まる
+    expect(dataSourcesQueryMock).toHaveBeenCalledTimes(10);
+    const lines = logSpy.mock.calls.map((c) => String(c[0]));
+    const warnLine = lines.find((l) => l.includes('"page cap reached"') && l.includes('queryDuplicateAsins'));
+    expect(warnLine).toBeDefined();
+    logSpy.mockRestore();
+  });
 });
 
 describe('expireOldDrafts', () => {
@@ -433,5 +487,78 @@ describe('expireOldDrafts', () => {
     expect(pagesRetrieveMock).toHaveBeenCalledTimes(1);
     // しかし update は呼ばれない (silent loss 防止)
     expect(pagesUpdateMock).not.toHaveBeenCalled();
+  });
+
+  it('uses APPROVAL_SLA_HOURS as default slaHours', async () => {
+    const now = new Date('2026-05-09T12:00:00.000Z');
+    dataSourcesQueryMock.mockResolvedValueOnce({ results: [], has_more: false });
+    const { expireOldDrafts } = await import('./notion.js');
+    await expireOldDrafts(now); // slaHours 未指定 → APPROVAL_SLA_HOURS=10 を使う想定
+    const arg = dataSourcesQueryMock.mock.calls[0]?.[0] as {
+      filter: { and: Array<{ date?: { before: string } }> };
+    };
+    // 12:00 - 10h = 02:00
+    expect(arg.filter.and[1]?.date?.before).toBe('2026-05-09T02:00:00.000Z');
+  });
+
+  it('warns when expire count >= EXPIRE_WARN_THRESHOLD (5)', async () => {
+    // 5 件 expire → warn 発火
+    dataSourcesQueryMock.mockResolvedValueOnce({
+      results: Array.from({ length: 5 }, (_, i) => ({ id: `p-${i}`, properties: {} })),
+      has_more: false,
+    });
+    pagesRetrieveMock.mockResolvedValue({
+      id: 'p',
+      properties: { Status: { select: { name: 'pending_review' } } },
+    });
+    pagesUpdateMock.mockResolvedValue({});
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const { expireOldDrafts } = await import('./notion.js');
+    const count = await expireOldDrafts(new Date());
+    expect(count).toBe(5);
+    const lines = logSpy.mock.calls.map((c) => String(c[0]));
+    const warnLine = lines.find((l) => l.includes('"high expire volume"') && l.includes('"count":5'));
+    expect(warnLine).toBeDefined();
+    logSpy.mockRestore();
+  });
+
+  it('does not warn when expire count < EXPIRE_WARN_THRESHOLD', async () => {
+    // 4 件 expire → warn 出ない
+    dataSourcesQueryMock.mockResolvedValueOnce({
+      results: Array.from({ length: 4 }, (_, i) => ({ id: `p-${i}`, properties: {} })),
+      has_more: false,
+    });
+    pagesRetrieveMock.mockResolvedValue({
+      id: 'p',
+      properties: { Status: { select: { name: 'pending_review' } } },
+    });
+    pagesUpdateMock.mockResolvedValue({});
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const { expireOldDrafts } = await import('./notion.js');
+    await expireOldDrafts(new Date());
+    const lines = logSpy.mock.calls.map((c) => String(c[0]));
+    expect(lines.some((l) => l.includes('"high expire volume"'))).toBe(false);
+    logSpy.mockRestore();
+  });
+
+  it('warns when MAX_QUERY_PAGES cap is reached', async () => {
+    dataSourcesQueryMock.mockResolvedValue({
+      results: [{ id: 'p', properties: {} }],
+      has_more: true,
+      next_cursor: 'cursor',
+    });
+    pagesRetrieveMock.mockResolvedValue({
+      id: 'p',
+      properties: { Status: { select: { name: 'pending_review' } } },
+    });
+    pagesUpdateMock.mockResolvedValue({});
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const { expireOldDrafts } = await import('./notion.js');
+    await expireOldDrafts(new Date());
+    expect(dataSourcesQueryMock).toHaveBeenCalledTimes(10);
+    const lines = logSpy.mock.calls.map((c) => String(c[0]));
+    const warnLine = lines.find((l) => l.includes('"page cap reached"') && l.includes('expireOldDrafts'));
+    expect(warnLine).toBeDefined();
+    logSpy.mockRestore();
   });
 });

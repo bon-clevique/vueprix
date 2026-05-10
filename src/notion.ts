@@ -1,6 +1,11 @@
 import { Client } from '@notionhq/client';
 import type { NotionCategory } from './category.js';
-import { COOLDOWN_HOURS } from './config.js';
+import {
+  APPROVAL_SLA_HOURS,
+  COOLDOWN_HOURS,
+  EXPIRE_WARN_THRESHOLD,
+  MAX_QUERY_PAGES,
+} from './config.js';
 import { logger } from './logger.js';
 
 // Notion DB「vueprix 投稿文」schema (Phase 1 で 2026-05-09 に拡張済):
@@ -66,6 +71,14 @@ export const CATEGORY = {
   FIXED_LIST: 'fixed-list',
 } as const;
 
+// Runtime membership check 用の Set。`extractSelect` が返す任意の string を
+// Status / NotionCategory に narrow するための型 guard と組で使う。
+const STATUS_VALUES: ReadonlySet<string> = new Set(Object.values(STATUS));
+const CATEGORY_VALUES: ReadonlySet<string> = new Set(Object.values(CATEGORY));
+
+const isStatus = (s: string): s is Status => STATUS_VALUES.has(s);
+const isNotionCategory = (c: string): c is NotionCategory => CATEGORY_VALUES.has(c);
+
 export interface Guideline {
   text: string;
   tags: string[];
@@ -87,6 +100,8 @@ export interface DraftCandidate {
   guidelineRelations?: readonly string[];
 }
 
+// fetchPageById は Status=approved の page しか返さない (それ以外は throw する) ので、
+// payload 経由で status を伝搬する必要はない。silent な status drift を避けるため field は削除。
 export interface DraftPayload {
   pageId: string;
   asin: string;
@@ -99,7 +114,6 @@ export interface DraftPayload {
   referencePrice: number;
   dropPercent: number;
   category: NotionCategory;
-  status: Status;
   dryRun: boolean;
 }
 
@@ -336,11 +350,18 @@ export const fetchPageById = async (pageId: string): Promise<DraftPayload> => {
   const client = buildClient();
   const page = (await client.pages.retrieve({ page_id: pageId })) as unknown as NotionPageRich;
   const props = page.properties;
-  const status = extractSelect(props.Status) as Status;
-  if (status !== STATUS.APPROVED) {
-    throw new Error(`pageId=${pageId} status=${status} (expected ${STATUS.APPROVED})`);
+  const rawStatus = extractSelect(props.Status);
+  // 任意 string → Status の narrow を runtime check 経由に統一 (旧: `as Status`)。
+  // 空文字 / typo / 未知の Notion select option は全て fail-fast。
+  if (!isStatus(rawStatus)) {
+    throw new Error(`pageId=${pageId} status=${rawStatus || '(empty)'} (not a known Status value)`);
   }
-  const category = (extractSelect(props['カテゴリ']) || CATEGORY.FIXED_LIST) as NotionCategory;
+  if (rawStatus !== STATUS.APPROVED) {
+    throw new Error(`pageId=${pageId} status=${rawStatus} (expected ${STATUS.APPROVED})`);
+  }
+  const rawCategory = extractSelect(props['カテゴリ']);
+  // 未知のカテゴリは silent に fixed-list に丸める (publish を止めない方針)。
+  const category: NotionCategory = isNotionCategory(rawCategory) ? rawCategory : CATEGORY.FIXED_LIST;
   return {
     pageId: page.id,
     asin: extractRichText(props.ASIN),
@@ -357,7 +378,6 @@ export const fetchPageById = async (pageId: string): Promise<DraftPayload> => {
     // 高精度 round 経由で integer に丸め直す。
     dropPercent: Math.round(Math.round(extractNumber(props['割引率']) * 1_000_000) / 10_000),
     category,
-    status,
     dryRun: extractCheckbox(props.DryRun),
   };
 };
@@ -396,8 +416,9 @@ export const queryDuplicateAsins = async (now: Date): Promise<Set<string>> => {
 
   const asins = new Set<string>();
   let cursor: string | undefined;
-  // page_size=100, has_more 時に逐次 paging
-  for (let i = 0; i < 10; i += 1) {
+  let reachedCap = true;
+  // page_size=100, has_more 時に逐次 paging。MAX_QUERY_PAGES に到達したら warn (要 cap 拡張)。
+  for (let i = 0; i < MAX_QUERY_PAGES; i += 1) {
     const res = (await client.dataSources.query({
       data_source_id: dataSourceId,
       filter,
@@ -408,8 +429,18 @@ export const queryDuplicateAsins = async (now: Date): Promise<Set<string>> => {
       const asin = extractRichText(page.properties.ASIN);
       if (asin) asins.add(asin);
     }
-    if (!res.has_more || !res.next_cursor) break;
+    if (!res.has_more || !res.next_cursor) {
+      reachedCap = false;
+      break;
+    }
     cursor = res.next_cursor;
+  }
+  if (reachedCap) {
+    logger.warn('notion', 'page cap reached', {
+      fn: 'queryDuplicateAsins',
+      maxPages: MAX_QUERY_PAGES,
+      collected: asins.size,
+    });
   }
   logger.info('notion', 'duplicate asins queried', { count: asins.size });
   return asins;
@@ -417,7 +448,10 @@ export const queryDuplicateAsins = async (now: Date): Promise<Set<string>> => {
 
 // Status=pending_review かつ 候補生成日時 < now-slaHours を query → updateStatusToExpired を逐次呼び。
 // 件数=20件以下想定 (1日20件 × 数日 × 失効率)。
-export const expireOldDrafts = async (now: Date, slaHours = 10): Promise<number> => {
+export const expireOldDrafts = async (
+  now: Date,
+  slaHours: number = APPROVAL_SLA_HOURS,
+): Promise<number> => {
   if (!isConfigured()) {
     logger.info('notion', 'env not configured, skipping expire');
     return 0;
@@ -434,7 +468,8 @@ export const expireOldDrafts = async (now: Date, slaHours = 10): Promise<number>
 
   const targetIds: string[] = [];
   let cursor: string | undefined;
-  for (let i = 0; i < 10; i += 1) {
+  let reachedCap = true;
+  for (let i = 0; i < MAX_QUERY_PAGES; i += 1) {
     const res = (await client.dataSources.query({
       data_source_id: dataSourceId,
       filter,
@@ -444,8 +479,18 @@ export const expireOldDrafts = async (now: Date, slaHours = 10): Promise<number>
     for (const page of res.results) {
       targetIds.push(page.id);
     }
-    if (!res.has_more || !res.next_cursor) break;
+    if (!res.has_more || !res.next_cursor) {
+      reachedCap = false;
+      break;
+    }
     cursor = res.next_cursor;
+  }
+  if (reachedCap) {
+    logger.warn('notion', 'page cap reached', {
+      fn: 'expireOldDrafts',
+      maxPages: MAX_QUERY_PAGES,
+      collected: targetIds.length,
+    });
   }
 
   for (const id of targetIds) {
@@ -457,6 +502,14 @@ export const expireOldDrafts = async (now: Date, slaHours = 10): Promise<number>
         type: err instanceof Error ? err.constructor.name : typeof err,
       });
     }
+  }
+  // 件数が EXPIRE_WARN_THRESHOLD を超えたら warn (運用異常 — bon の承認停滞 / 候補生成過多)。
+  // Slack 通知連携は別 backlog 扱い。本箇所は warn ログのみ。
+  if (targetIds.length >= EXPIRE_WARN_THRESHOLD) {
+    logger.warn('notion', 'high expire volume', {
+      count: targetIds.length,
+      threshold: EXPIRE_WARN_THRESHOLD,
+    });
   }
   logger.info('notion', 'expired old drafts', { count: targetIds.length });
   return targetIds.length;

@@ -13,7 +13,7 @@ import {
   MIN_PRICE_YEN,
   X_MAX_CHARS,
 } from './config.js';
-import { calcDropPercent, isGoodDeal } from './filter.js';
+import { calcDropPercent, filterByActiveAsins, isGoodDeal } from './filter.js';
 import { checkAsin, getDeals } from './keepa.js';
 import { logger } from './logger.js';
 import {
@@ -145,7 +145,8 @@ export const main = async (): Promise<void> => {
 
   const merged = dedupe([...fixedCandidates, ...dealCandidates]);
   const afterBlocklist = merged.filter((c) => !blocklist.has(c.asin));
-  const filtered = afterBlocklist.filter((c) => !activeAsins.has(c.asin));
+  // filter.ts の helper に統一 (旧: inline filter で同義実装の重複)。
+  const filtered = filterByActiveAsins(afterBlocklist, activeAsins);
   const targets = filtered.slice(0, MAX_POSTS_PER_RUN);
   logger.info('draft', 'targets selected', {
     afterDedupe: merged.length,

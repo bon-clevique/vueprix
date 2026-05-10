@@ -1,18 +1,239 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-// Mock @notionhq/client to avoid real network calls if main were ever invoked.
-vi.mock('@notionhq/client', () => ({
-  Client: class {
-    pages = { create: vi.fn(), update: vi.fn(), retrieve: vi.fn() };
-    dataSources = { query: vi.fn() };
-  },
+// 外部 I/O dependency をすべてモック化。各 test 内で mockResolved* を上書きしてシナリオを切替える。
+const getDealsMock = vi.fn();
+const checkAsinMock = vi.fn();
+const getItemsMock = vi.fn();
+const generateReasonMock = vi.fn();
+const createDraftPageMock = vi.fn();
+const expireOldDraftsMock = vi.fn();
+const queryDuplicateAsinsMock = vi.fn();
+const fetchActiveGuidelinesMock = vi.fn();
+const loadBlocklistMock = vi.fn();
+
+vi.mock('./keepa.js', () => ({
+  getDeals: (...args: unknown[]) => getDealsMock(...args),
+  checkAsin: (...args: unknown[]) => checkAsinMock(...args),
 }));
+
+vi.mock('./paapi.js', () => ({
+  getItems: (...args: unknown[]) => getItemsMock(...args),
+}));
+
+vi.mock('./claude.js', () => ({
+  generateReason: (...args: unknown[]) => generateReasonMock(...args),
+}));
+
+vi.mock('./notion.js', () => ({
+  createDraftPage: (...args: unknown[]) => createDraftPageMock(...args),
+  expireOldDrafts: (...args: unknown[]) => expireOldDraftsMock(...args),
+  fetchActiveGuidelines: (...args: unknown[]) => fetchActiveGuidelinesMock(...args),
+  queryDuplicateAsins: (...args: unknown[]) => queryDuplicateAsinsMock(...args),
+}));
+
+vi.mock('./blocklist.js', () => ({
+  loadBlocklist: (...args: unknown[]) => loadBlocklistMock(...args),
+}));
+
+// FIXED_ASINS は config.ts に const で定義されているので、mockKeepa の checkAsin に
+// "全 ASIN について null を返す" 振る舞いを default 設定し、fixed candidates が混入しないようにする。
+const resetAllMocks = () => {
+  getDealsMock.mockReset();
+  checkAsinMock.mockReset();
+  getItemsMock.mockReset();
+  generateReasonMock.mockReset();
+  createDraftPageMock.mockReset();
+  expireOldDraftsMock.mockReset();
+  queryDuplicateAsinsMock.mockReset();
+  fetchActiveGuidelinesMock.mockReset();
+  loadBlocklistMock.mockReset();
+
+  // sane defaults
+  getDealsMock.mockResolvedValue([]);
+  checkAsinMock.mockResolvedValue(null);
+  getItemsMock.mockResolvedValue([]);
+  generateReasonMock.mockResolvedValue('test reason');
+  createDraftPageMock.mockResolvedValue('page-mock-id');
+  expireOldDraftsMock.mockResolvedValue(0);
+  queryDuplicateAsinsMock.mockResolvedValue(new Set<string>());
+  fetchActiveGuidelinesMock.mockResolvedValue([]);
+  loadBlocklistMock.mockResolvedValue(new Set<string>());
+};
+
+const buildDeal = (overrides: Partial<{
+  asin: string;
+  title: string;
+  currentPrice: number;
+  referencePrice: number;
+  dropPercent: number;
+}> = {}) => ({
+  asin: 'B000DEAL1',
+  title: 'Sample Deal',
+  currentPrice: 800,
+  referencePrice: 1000,
+  dropPercent: 20,
+  ...overrides,
+});
 
 describe('draft entrypoint', () => {
   it('exports main and does not auto-run when VITEST is set', async () => {
-    // VITEST is set automatically by the runner. main() should be a callable export but not invoked.
     const mod = await import('./draft.js');
     expect(typeof mod.main).toBe('function');
-    // No assertion on side effects: if main had run, it would attempt to read env / call APIs.
+  });
+});
+
+describe('draft.main integration', () => {
+  const originalEnv = { ...process.env };
+
+  beforeEach(() => {
+    resetAllMocks();
+    process.env.PAAPI_PARTNER_TAG = 'test-tag-22';
+    process.env.DRY_RUN = 'true';
+    // KEEPA_CATEGORIES は config.ts に 5 件あるので、各 categoryId について getDealsMock が呼ばれる。
+    // default で空配列を返すので、test 内で個別カテゴリだけ override する。
+  });
+
+  afterEach(() => {
+    // 元の env に戻す
+    for (const k of Object.keys(process.env)) {
+      if (!(k in originalEnv)) delete process.env[k];
+    }
+    Object.assign(process.env, originalEnv);
+    vi.restoreAllMocks();
+  });
+
+  it('drops candidates whose ASIN is in the blocklist', async () => {
+    // 食品カテゴリで 2 件 deal 返す。1 件は blocklist にある。
+    getDealsMock.mockImplementation((categoryId: number) => {
+      if (categoryId === 57239051) {
+        return Promise.resolve([
+          buildDeal({ asin: 'B000BLOCK', title: 'Blocked Item' }),
+          buildDeal({ asin: 'B000PASS', title: 'Allowed Item' }),
+        ]);
+      }
+      return Promise.resolve([]);
+    });
+    loadBlocklistMock.mockResolvedValue(new Set(['B000BLOCK']));
+
+    const { main } = await import('./draft.js');
+    await main();
+
+    // createDraftPage は B000PASS のみで呼ばれるはず
+    const calledAsins = createDraftPageMock.mock.calls.map((c) => (c[0] as { asin: string }).asin);
+    expect(calledAsins).toContain('B000PASS');
+    expect(calledAsins).not.toContain('B000BLOCK');
+  });
+
+  it('drops candidates whose ASIN is already active in Notion (duplicate)', async () => {
+    getDealsMock.mockImplementation((categoryId: number) => {
+      if (categoryId === 57239051) {
+        return Promise.resolve([
+          buildDeal({ asin: 'B000ACTIVE', title: 'Active in Notion' }),
+          buildDeal({ asin: 'B000NEW', title: 'New' }),
+        ]);
+      }
+      return Promise.resolve([]);
+    });
+    queryDuplicateAsinsMock.mockResolvedValue(new Set(['B000ACTIVE']));
+
+    const { main } = await import('./draft.js');
+    await main();
+
+    const calledAsins = createDraftPageMock.mock.calls.map((c) => (c[0] as { asin: string }).asin);
+    expect(calledAsins).toContain('B000NEW');
+    expect(calledAsins).not.toContain('B000ACTIVE');
+  });
+
+  it('limits drafts to MAX_POSTS_PER_RUN (=2)', async () => {
+    // 5 件返して、2 件だけ draft されることを確認
+    getDealsMock.mockImplementation((categoryId: number) => {
+      if (categoryId === 57239051) {
+        return Promise.resolve([
+          buildDeal({ asin: 'B001' }),
+          buildDeal({ asin: 'B002' }),
+          buildDeal({ asin: 'B003' }),
+          buildDeal({ asin: 'B004' }),
+          buildDeal({ asin: 'B005' }),
+        ]);
+      }
+      return Promise.resolve([]);
+    });
+
+    const { main } = await import('./draft.js');
+    await main();
+
+    expect(createDraftPageMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('falls back to Keepa-only when PA-API getItems throws', async () => {
+    getDealsMock.mockImplementation((categoryId: number) => {
+      if (categoryId === 57239051) {
+        return Promise.resolve([buildDeal({ asin: 'B000FALL', title: 'Fallback Title' })]);
+      }
+      return Promise.resolve([]);
+    });
+    getItemsMock.mockRejectedValueOnce(new Error('PA-API down'));
+
+    const { main } = await import('./draft.js');
+    await main();
+
+    // PA-API 失敗でも Keepa 由来データで draft 作成は継続する
+    expect(createDraftPageMock).toHaveBeenCalledTimes(1);
+    const draftArg = createDraftPageMock.mock.calls[0]?.[0] as { asin: string; title: string };
+    expect(draftArg.asin).toBe('B000FALL');
+    // PA-API fallback 時は Keepa の title を使う
+    expect(draftArg.title).toBe('Fallback Title');
+  });
+
+  it('uses PA-API product info when available (preferred over Keepa fallback)', async () => {
+    getDealsMock.mockImplementation((categoryId: number) => {
+      if (categoryId === 57239051) {
+        return Promise.resolve([buildDeal({ asin: 'B000PA', title: 'Keepa Title' })]);
+      }
+      return Promise.resolve([]);
+    });
+    getItemsMock.mockResolvedValue([
+      {
+        asin: 'B000PA',
+        title: 'PA-API Official Title',
+        imageUrl: 'https://example.com/img.jpg',
+        currentPrice: 800,
+        affiliateUrl: 'https://www.amazon.co.jp/dp/B000PA?tag=test-tag-22',
+      },
+    ]);
+
+    const { main } = await import('./draft.js');
+    await main();
+
+    expect(createDraftPageMock).toHaveBeenCalledTimes(1);
+    const draftArg = createDraftPageMock.mock.calls[0]?.[0] as { title: string };
+    expect(draftArg.title).toBe('PA-API Official Title');
+  });
+
+  it('returns early when no targets remain after filtering', async () => {
+    // 全 deal を blocklist で排除すると targets=0 → createDraftPage 呼ばれず
+    getDealsMock.mockImplementation((categoryId: number) => {
+      if (categoryId === 57239051) {
+        return Promise.resolve([buildDeal({ asin: 'B000ONLY' })]);
+      }
+      return Promise.resolve([]);
+    });
+    loadBlocklistMock.mockResolvedValue(new Set(['B000ONLY']));
+
+    const { main } = await import('./draft.js');
+    await main();
+
+    expect(createDraftPageMock).not.toHaveBeenCalled();
+    // PA-API も呼ばれないはず (targets=0 で early return)
+    expect(getItemsMock).not.toHaveBeenCalled();
+  });
+
+  it('expires old drafts before collecting candidates', async () => {
+    expireOldDraftsMock.mockResolvedValue(3);
+
+    const { main } = await import('./draft.js');
+    await main();
+
+    expect(expireOldDraftsMock).toHaveBeenCalledTimes(1);
   });
 });
