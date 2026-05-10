@@ -271,7 +271,26 @@ describe('fetchPageById', () => {
       dropPercent: 15,
       category: 'food',
       dryRun: false,
+      postedAt: null,
     });
+  });
+
+  it('extracts postedAt when 投稿日時 is set on the page', async () => {
+    pagesRetrieveMock.mockResolvedValueOnce(
+      buildPage('approved', {
+        '投稿日時': { date: { start: '2026-05-09T14:00:00.000Z' } },
+      }),
+    );
+    const { fetchPageById } = await import('./notion.js');
+    const payload = await fetchPageById('page-1');
+    expect(payload.postedAt).toBe('2026-05-09T14:00:00.000Z');
+  });
+
+  it('postedAt is null when 投稿日時 property is absent', async () => {
+    pagesRetrieveMock.mockResolvedValueOnce(buildPage('approved'));
+    const { fetchPageById } = await import('./notion.js');
+    const payload = await fetchPageById('page-1');
+    expect(payload.postedAt).toBeNull();
   });
 
   it('throws on unknown Status value (membership check via type guard)', async () => {

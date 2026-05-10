@@ -68,6 +68,23 @@ PAT は Notion automation 内に平文で格納されるため fine-grained で�
 5. **有効期限**: 90 日
 6. ローテーション運用: 期限到来 1 週間前にカレンダー通知 → 新 PAT 発行 → Notion automation 設定で差し替え → 旧 PAT を revoke
 
+### Threat model: PAT compromise
+
+PAT は **Notion automation 設定欄に平文で格納**される (Notion 側の暗号化保護はあるが、bon の Notion アカウントが侵害された場合は閲覧可能)。漏洩時の最大被害と緩和を整理する:
+
+| 漏洩経路 | 最大被害 | 緩和 |
+|---|---|---|
+| Notion アカウント侵害 (パスワード流出 / セッション hijack) | 攻撃者が `repository_dispatch` を任意発火可。`page_id` を指定して publish workflow を起動できる | (1) `fetchPageById` が Status=approved でない page を reject。(2) 投稿日時セット済 page も二重ガードで reject (本 PR で追加)。攻撃者が新規 page を Notion 側で作って approve しないと publish できない (= 既に Notion 編集権を持っているのと等価)。GitHub secrets (X / Bluesky tokens) は workflow run logs に出ない限り抜き取れない |
+| GitHub PAT 漏洩 (PAT 直接流出) | repository_dispatch 任意発火 + Actions ログ閲覧。secrets は変数展開された後の log にしか出ないが、攻撃者が `echo "$X_API_KEY"` を含む workflow を PR 経由で merge できれば抜ける | (1) PAT は fine-grained, repository limit=`vueprix` only, permission=Actions write / Metadata read のみ。(2) Branch protection で main への direct push 禁止 → workflow 改変は PR レビュー経由のみ |
+
+**運用責務**:
+
+- 90 日ローテに加えて、**月 1 回 Actions タブで `bot-publish.yml` の trigger 履歴を確認**する。bon が承認していない時刻に repository_dispatch が走っていれば PAT compromise の可能性 → 即 revoke + 再発行
+- `bon 以外が approve したように見える page` が publish された場合も同上 (Notion アカウント侵害シナリオ)
+- secrets (X / Bluesky tokens) を抜かれたと判断したら全 token rotate + 過去 90 日の post-history artifact を確認 (任意のなりすまし投稿の有無)
+
+CRIT-1 (page_id script injection) は PR #17 で env var 経由化により閉じた。本 threat model はそれ**以降**の残存リスクを記載している。
+
 ## 承認 SLA と expired ステート
 
 - 候補生成日時から **10 時間以内** に bon が承認することを期待値とする
@@ -95,6 +112,23 @@ PAT は Notion automation 内に平文で格納されるため fine-grained で�
 ### approved → 全 poster 失敗
 - Status は `approved` のまま残る (`updateStatusToPosted` は呼ばれない)
 - 手動で `bot-publish.yml` を `gh workflow run` で再実行可能
+
+### Status を posted から approved に戻さない (運用ルール)
+
+**禁止**: 既に `posted` になっている row の Status を手動で `approved` に戻す操作。
+
+**理由**: `posted` row は「投稿日時」property が既にセット済。Status だけを `approved` に戻すと:
+
+1. Notion automation の trigger 「Status が approved に変わったとき」が再発火 → `repository_dispatch` で publish workflow が再起動
+2. `fetchPageById` の Status check は通る (`approved` なので)
+3. **二重ガード**: 本 PR で追加した「投稿日時 セット済 → early return」で防御 — `publish.ts` 内で `if (payload.postedAt) { return; }` を実行するため X / Bluesky への二重投稿は **発生しない**
+4. ただし `repository_dispatch` の発火と Actions の run history は残るため、運用ノイズにはなる
+
+**再投稿が必要な場合の手順**:
+
+1. 元 row は `posted` のまま放置 (history 保全)
+2. 新規 row を duplicate で作成: Notion DB で対象 row を選択 → 「複製」 → 新 row の Status を `pending_review` にし「投稿日時」を空に戻し「候補生成日時」を現在時刻に更新 → bon が承認 → publish 動線で再投稿
+3. 重複投稿リスクを抑えたいなら `posted.json` (asin 単位の履歴) との突合で COOLDOWN_HOURS=72 を考慮 (`queryDuplicateAsins` 経由で draft 段階の重複は自動回避される)
 
 ## 関連ファイル
 

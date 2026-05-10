@@ -102,6 +102,10 @@ export interface DraftCandidate {
 
 // fetchPageById は Status=approved の page しか返さない (それ以外は throw する) ので、
 // payload 経由で status を伝搬する必要はない。silent な status drift を避けるため field は削除。
+//
+// postedAt は「Status=approved + 投稿日時セット済」race の二重投稿ガード用に持ち回す。
+// 通常 publish 動線では null だが、posted→approved 戻し / Notion automation 多重発火など
+// edge case で値がセットされていることがあり、publish.ts 側で early return の signal にする。
 export interface DraftPayload {
   pageId: string;
   asin: string;
@@ -115,6 +119,7 @@ export interface DraftPayload {
   dropPercent: number;
   category: NotionCategory;
   dryRun: boolean;
+  postedAt: string | null;
 }
 
 const buildClient = (): Client =>
@@ -322,6 +327,13 @@ const extractCheckbox = (prop: unknown): boolean => {
   return (prop as { checkbox?: boolean }).checkbox ?? false;
 };
 
+// Notion date property の date.start を ISO 文字列で返す。未設定 / null は null。
+const extractDate = (prop: unknown): string | null => {
+  if (!prop || typeof prop !== 'object') return null;
+  const date = (prop as { date?: { start?: string | null } | null }).date;
+  return date?.start ?? null;
+};
+
 // C2 対応: expire と human approval の race を防ぐため retrieve→check→update の 2-step (compare-and-set 相当)。
 // 期限直前 (T0+9h59m) に bon が pending_review → approved に変更した直後、
 // 別 cron の expireOldDrafts query 結果が Notion 側 indexing 遅延でまだ pending_review を返すケースがあり、
@@ -379,6 +391,7 @@ export const fetchPageById = async (pageId: string): Promise<DraftPayload> => {
     dropPercent: Math.round(Math.round(extractNumber(props['割引率']) * 1_000_000) / 10_000),
     category,
     dryRun: extractCheckbox(props.DryRun),
+    postedAt: extractDate(props['投稿日時']),
   };
 };
 

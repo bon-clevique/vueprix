@@ -26,6 +26,11 @@ permissions:
 
 # 全体 serialize (page_id 単位ではなく global) で publish の race window を完全に閉じる。
 # Phase 11 architect review C1 対応。1 cron 20 件、publish 1 件あたり数秒程度の throughput 影響は許容。
+#
+# MED-1 review (concurrency.group sanitize) について: group は GitHub Actions メタフィールドで
+# `${{ }}` 展開のみ (shell ではない) のため client_payload script injection は元々できない。
+# 加えて global 固定 ('vueprix-publish-global') にしているため client_payload の値が group に
+# 流れる経路自体が存在しない。従って env-var 経由化は不要 — 本コメントで縮退判断を明文化する。
 concurrency:
   group: vueprix-publish-global
   cancel-in-progress: false

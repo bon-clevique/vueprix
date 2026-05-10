@@ -113,6 +113,25 @@ describe('publish entrypoint', () => {
     expect(pagesUpdateMock).not.toHaveBeenCalled();
   });
 
+  it('returns early when Status=approved but 投稿日時 already set (二重ガード)', async () => {
+    // posted→approved 戻し race のシミュレーション。
+    // Status は approved だが「投稿日時」が既にセット済 → fetchPageById は通すが
+    // publish.ts の追加 guard で early return → posters 未呼び出し + Status update なし。
+    pagesRetrieveMock.mockResolvedValueOnce(
+      buildApprovedPage({
+        '投稿日時': { date: { start: '2026-05-09T14:00:00.000Z' } },
+      }),
+    );
+    const { main } = await import('./publish.js');
+    await expect(
+      main(['node', 'publish.ts', '--page-id', '0123456789abcdef0123456789abcdef']),
+    ).resolves.toBeUndefined();
+    expect(xPostMock).not.toHaveBeenCalled();
+    expect(blueskyPostMock).not.toHaveBeenCalled();
+    expect(pagesUpdateMock).not.toHaveBeenCalled();
+    expect(appendHistoryMock).not.toHaveBeenCalled();
+  });
+
   it('throws when --page-id is missing', async () => {
     const { main } = await import('./publish.js');
     await expect(main(['node', 'publish.ts'])).rejects.toThrow(/--page-id/);
