@@ -33,15 +33,14 @@ Notion Plus 加入が前提。DB のオートメーションメニューから:
 
 1. **トリガー**: 「プロパティが変更されたとき」 → `Status` が `approved` に変わったとき
 2. **アクション**: 「Webhook を送信」
-3. **URL**:
+3. **URL** (Cloudflare Worker — 実 URL は `worker/` deploy 後に確定):
    ```
-   https://api.github.com/repos/<owner>/vueprix/dispatches
+   https://vueprix-webhook-proxy.<subdomain>.workers.dev
    ```
 4. **Headers**:
    ```
-   Authorization: Bearer <GitHub PAT>
-   Accept: application/vnd.github+json
-   User-Agent: vueprix-notion-bot
+   Content-Type: application/json
+   X-Notion-Secret: <NOTION_SHARED_SECRET>
    ```
 5. **Body** (JSON):
    ```json
@@ -53,11 +52,38 @@ Notion Plus 加入が前提。DB のオートメーションメニューから:
    }
    ```
 
-`{{Page ID}}` は Notion automation が自動展開する変数。
+`{{Page ID}}` は Notion automation が自動展開する変数。`event_type` 行は Worker 側でも `DISPATCH_EVENT_TYPE` env var から再宣言されるため省略可だが、Notion 側の debug 用に残しておくと読みやすい。
+
+## Cloudflare Worker 中間プロキシ (`worker/`)
+
+Notion → GitHub を直結する代わりに Cloudflare Worker (`vueprix-webhook-proxy`) を間に挟む。理由:
+
+- GitHub PAT は Notion automation 設定欄に平文で格納されるため、Notion アカウント侵害時に **PAT が抜き取られる threat** が存在した
+- Worker を挟むことで PAT は Cloudflare Worker secrets に格納され、Notion からは見えない。Notion 側には Worker と Notion で共有する **`NOTION_SHARED_SECRET`** のみを置く
+- Notion アカウント侵害時の最大被害は「shared secret が漏洩 → 攻撃者が Worker に repository_dispatch を発火させ得る」だが、PAT 本体は守られる。さらに Worker secret を rotate するだけで遮断できる (PAT 再発行不要)
+
+### Worker contract
+
+| 項目 | 値 |
+|---|---|
+| メソッド | `POST` のみ (それ以外 405) |
+| 認証 | `X-Notion-Secret` header と Worker secret の constant-time 比較 |
+| 入力 | `{ "page_id": "<notion-uuid>" }` (dashed / undashed 両対応) |
+| 成功 | `202` を返却し、GitHub `repository_dispatch` を `event_type=vueprix-publish` で発火 |
+| 失敗 | 401 (auth) / 400 (validation) / 502 (GitHub API non-2xx) |
+
+詳細・deploy 手順 → `worker/README.md`
+
+### Secrets ownership
+
+| Secret | 保管場所 | rotate 手段 |
+|---|---|---|
+| `GITHUB_PAT` | Cloudflare Worker secrets | `wrangler secret put GITHUB_PAT` で上書き |
+| `NOTION_SHARED_SECRET` | Worker secrets (Cloudflare 側) + Notion automation header (Notion 側) | Worker 側で `wrangler secret put` → Notion 側 header を同じ値に揃える |
 
 ## GitHub PAT (fine-grained personal access token)
 
-PAT は Notion automation 内に平文で格納されるため fine-grained で最小権限・短期有効期限で発行する:
+PAT は Cloudflare Worker secrets に格納される。Worker secrets は Notion からは見えないが、Cloudflare アカウント侵害時の最大被害を抑えるため引き続き fine-grained で最小権限・短期有効期限で発行する:
 
 1. GitHub Settings → Developer settings → Personal access tokens → Fine-grained tokens → Generate new token
 2. **Resource owner**: bon
@@ -66,16 +92,16 @@ PAT は Notion automation 内に平文で格納されるため fine-grained で�
    - Actions: **Read and write**
    - Metadata: **Read-only** (PAT 必須)
 5. **有効期限**: 90 日
-6. ローテーション運用: 期限到来 1 週間前にカレンダー通知 → 新 PAT 発行 → Notion automation 設定で差し替え → 旧 PAT を revoke
+6. ローテーション運用: 期限到来 1 週間前にカレンダー通知 → 新 PAT 発行 → `wrangler secret put GITHUB_PAT` で Worker secret を上書き → 旧 PAT を revoke
 
 ### Threat model: PAT compromise
 
-PAT は **Notion automation 設定欄に平文で格納**される (Notion 側の暗号化保護はあるが、bon の Notion アカウントが侵害された場合は閲覧可能)。漏洩時の最大被害と緩和を整理する:
+PAT は **Cloudflare Worker secrets に格納**される (PR-4 以降)。Notion 側には PAT を置かず、代わりに `NOTION_SHARED_SECRET` (Worker と Notion で共有) のみを置く。漏洩時の最大被害と緩和を整理する:
 
 | 漏洩経路 | 最大被害 | 緩和 |
 |---|---|---|
-| Notion アカウント侵害 (パスワード流出 / セッション hijack) | 攻撃者が `repository_dispatch` を任意発火可。`page_id` を指定して publish workflow を起動できる | (1) `fetchPageById` が Status=approved でない page を reject。(2) 投稿日時セット済 page も二重ガードで reject (本 PR で追加)。攻撃者が新規 page を Notion 側で作って approve しないと publish できない (= 既に Notion 編集権を持っているのと等価)。GitHub secrets (X / Bluesky tokens) は workflow run logs に出ない限り抜き取れない |
-| GitHub PAT 漏洩 (PAT 直接流出) | repository_dispatch 任意発火 + Actions ログ閲覧。secrets は変数展開された後の log にしか出ないが、攻撃者が `echo "$X_API_KEY"` を含む workflow を PR 経由で merge できれば抜ける | (1) PAT は fine-grained, repository limit=`vueprix` only, permission=Actions write / Metadata read のみ。(2) Branch protection で main への direct push 禁止 → workflow 改変は PR レビュー経由のみ |
+| Notion アカウント侵害 (パスワード流出 / セッション hijack) | 攻撃者が `NOTION_SHARED_SECRET` を読める。Worker に repository_dispatch を任意発火させ得る (PAT 本体は抜けない) | (1) `wrangler secret put NOTION_SHARED_SECRET` で 1 コマンド rotate (PAT 再発行不要)。(2) `fetchPageById` が Status=approved でない page を reject。(3) 投稿日時セット済 page も二重ガードで reject。攻撃者が新規 page を Notion 側で作って approve しないと publish できない (= 既に Notion 編集権を持っているのと等価)。GitHub secrets (X / Bluesky tokens) は workflow run logs に出ない限り抜き取れない |
+| Cloudflare アカウント侵害 (Worker secret 直接流出) | PAT が流出 → repository_dispatch 任意発火 + Actions ログ閲覧。secrets は変数展開された後の log にしか出ないが、攻撃者が `echo "$X_API_KEY"` を含む workflow を PR 経由で merge できれば抜ける | (1) PAT は fine-grained, repository limit=`vueprix` only, permission=Actions write / Metadata read のみ。(2) Branch protection で main への direct push 禁止 → workflow 改変は PR レビュー経由のみ。(3) Cloudflare 側に 2FA + hardware key 必須 |
 
 **運用責務**:
 
@@ -96,8 +122,10 @@ CRIT-1 (page_id script injection) は PR #17 で env var 経由化により閉�
 ### Webhook が発火しない
 1. Notion automation の有効/無効を確認
 2. Status が `approved` に変更されているか (型を間違えて他 select option を作っていないか)
-3. PAT 有効期限切れではないか (gh API で 401 が出る)
-4. GitHub Actions タブで `bot-publish.yml` の実行履歴を確認
+3. Cloudflare Worker (`vueprix-webhook-proxy`) が起動しているか (Cloudflare dashboard でログ確認)
+4. `X-Notion-Secret` header が Worker secret と一致しているか (Worker ログに 401 が出ていれば mismatch)
+5. PAT 有効期限切れではないか (Worker ログに `GitHub dispatch failed: 401` が出ていれば PAT 失効)
+6. GitHub Actions タブで `bot-publish.yml` の実行履歴を確認
 
 ### Webhook 発火するが publish workflow が動かない
 1. `gh run list -R <owner>/vueprix --workflow bot-publish.yml --limit 5`
