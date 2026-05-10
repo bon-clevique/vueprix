@@ -3,7 +3,12 @@ import { randomBytes } from 'node:crypto';
 import { buildAffiliateUrl, requirePartnerTag } from './affiliate.js';
 import { appendHistory } from './history.js';
 import { logger } from './logger.js';
-import { fetchPageById, updateStatusToPosted, type DraftPayload } from './notion.js';
+import {
+  fetchPageById,
+  incrementFailureCount,
+  updateStatusToPosted,
+  type DraftPayload,
+} from './notion.js';
 import type { ProductInfo } from './paapi.js';
 import { anySucceeded, dispatch, posters, type PostInput } from './posters/index.js';
 
@@ -117,10 +122,29 @@ export const main = async (argv: readonly string[]): Promise<void> => {
     });
   } else {
     // 全 poster 失敗時は Status を posted に更新しない (再実行で再試行できるよう approved のまま残す)。
+    // ただし「投稿失敗回数」を Notion 側でカウントし、MAX_PUBLISH_FAILURES に達したら Status=blocked
+    // に自動遷移させる (永続的な投稿不能 page を運用上隔離する hook)。incrementFailureCount は内部で
+    // retrieve→update の 2-step。失敗内容は最終エラーに記録 (rich_text、truncate 1900 適用済)。
     logger.warn('publish', 'all posters failed, leaving status=approved for retry', {
       asin: payload.asin,
       result,
     });
+    try {
+      const { count, blocked } = await incrementFailureCount(args.pageId, JSON.stringify(result));
+      if (blocked) {
+        logger.warn('publish', 'page blocked after MAX_PUBLISH_FAILURES failures', {
+          pageId: args.pageId,
+          asin: payload.asin,
+          count,
+        });
+      }
+    } catch (err) {
+      // failure tracking 自体の失敗は publish の主目的を妨げない (warn のみ)。
+      logger.error('publish', 'failure count update failed', {
+        pageId: args.pageId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
   }
 };
 
