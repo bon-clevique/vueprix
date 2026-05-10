@@ -1,0 +1,14 @@
+name = "vueprix-webhook-proxy"
+main = "src/index.ts"
+compatibility_date = "2026-05-11"
+workers_dev = true
+
+# Secrets (set with `wrangler secret put <NAME>`):
+# - GITHUB_PAT: fine-grained PAT (Actions:Write + Metadata:Read, vueprix only)
+# - NOTION_SHARED_SECRET: random string matched against the X-Notion-Secret header
+#                        sent by the Notion automation
+
+[vars]
+GITHUB_OWNER = "bon-clevique"
+GITHUB_REPO = "vueprix"
+DISPATCH_EVENT_TYPE = "vueprix-publish"

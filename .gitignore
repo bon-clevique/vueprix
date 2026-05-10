@@ -32,3 +32,8 @@ coverage/
 # Misc
 *.tgz
 .cache/
+
+# Cloudflare Worker
+worker/.wrangler/
+worker/node_modules/
+worker/dist/
