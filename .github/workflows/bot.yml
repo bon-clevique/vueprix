@@ -21,7 +21,7 @@ on:
         default: 'true'
 
 permissions:
-  contents: write   # post-history.jsonl の auto-commit のため (将来 artifact 化したら read に降格可)
+  contents: read   # post-history.jsonl は artifact upload するので write 権限は不要
 
 concurrency:
   group: vueprix-draft
@@ -57,29 +57,18 @@ jobs:
           LOG_LEVEL: info
         run: npm run draft
 
-      - name: Commit post-history
-        run: |
-          git config --local user.email "action@github.com"
-          git config --local user.name "GitHub Action"
-          git add data/post-history.jsonl
-          if git diff --staged --quiet; then
-            echo "no data/post-history.jsonl changes"
-            exit 0
-          fi
-          git commit -m "chore: update post-history [skip ci]"
-          for i in 1 2 3; do
-            if ! git pull --rebase origin main; then
-              echo "rebase failed (attempt $i)"
-              git rebase --abort 2>/dev/null || true
-              sleep 2
-              continue
-            fi
-            if git push; then
-              echo "push succeeded on attempt $i"
-              exit 0
-            fi
-            echo "push rejected (attempt $i), retrying"
-            sleep 2
-          done
-          echo "push failed after 3 attempts" >&2
-          exit 1
+      # post-history.jsonl は artifact として upload する (旧 git auto-commit 方式を廃止)。
+      # 理由: contents: write 権限を削るため + auto-commit による push race を排除。
+      # 90 日 retention で監査ログ用途には十分。長期解析が必要になったら別途集約 job を追加する。
+      #
+      # post-history.jsonl は audit-only。重複除去は Notion DB の queryDuplicateAsins
+      # が SoT のため、cross-run 継続性は不要。各 run の artifact は独立 snapshot で
+      # 90 日保持する設計 (PR-2 で git commit から artifact upload に移行)。
+      - name: Upload post-history artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: post-history-${{ github.run_id }}
+          path: data/post-history.jsonl
+          retention-days: 90
+          if-no-files-found: ignore

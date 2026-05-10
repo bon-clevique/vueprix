@@ -60,6 +60,18 @@ export const main = async (argv: readonly string[]): Promise<void> => {
     return;
   }
 
+  // 二重ガード: Status=approved だが「投稿日時」がセット済 = 過去に publish 済の row を
+  // 何らかの理由で approved に戻したケース (運用ミス / Notion automation 多重発火 race)。
+  // Status check (fetchPageById) を擦り抜けるので追加で early return する。
+  if (payload.postedAt) {
+    logger.warn('publish', 'page already posted, refusing duplicate', {
+      pageId: args.pageId,
+      asin: payload.asin,
+      postedAt: payload.postedAt,
+    });
+    return;
+  }
+
   const product = buildProductFromPayload(payload);
   const input: PostInput = {
     product,

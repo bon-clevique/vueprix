@@ -30,3 +30,8 @@ jobs:
 
       - name: Test
         run: npm test
+
+      # high+ 脆弱性で fail させる (low / moderate は ignore)。
+      # production / dev 両方を audit 対象 (default 動作)。
+      - name: npm audit (high+)
+        run: npm audit --audit-level=high
