@@ -10,12 +10,20 @@ export const FIXED_ASINS: readonly string[] = [
 ];
 
 // Amazon.co.jp = Keepa domain 5
-// Verified 2026-05-06 via scripts/verify-keepa-categories.ts:
-//   57239051  → 食品・飲料・お酒 (2,192,897 products, root)
-//   160384011 → ドラッグストア (3,577,632 products, root)
-// See docs/notes/keepa-categories.md
+// Verified via scripts/verify-keepa-categories.ts. See docs/notes/keepa-categories.md.
+//   57239051   → 食品・飲料・お酒 (2.2M, food)
+//   160384011  → ドラッグストア (3.6M, health)
+//   2127209051 → パソコン・周辺機器 (6.4M, pc-desk)
+//   637394     → ゲーム (489K, gaming)
+//   3477981    → イヤホン・ヘッドホン本体 (93K, audio)
 export const KEEPA_DOMAIN = 5;
-export const KEEPA_CATEGORIES: readonly number[] = [57239051, 160384011];
+export const KEEPA_CATEGORIES: readonly number[] = [
+  57239051,
+  160384011,
+  2127209051,
+  637394,
+  3477981,
+];
 
 export const DROP_THRESHOLD_PERCENT = 15;
 export const HISTORY_DAYS = 90;
@@ -27,7 +35,6 @@ export const COOLDOWN_HOURS = 24;
 export const X_MAX_CHARS = 280;
 export const BSKY_MAX_CHARS = 300;
 
-export const POSTED_JSON_PATH = "data/posted.json";
 export const POST_HISTORY_PATH = "data/post-history.jsonl";
 
 export const CLAUDE_MODEL = "claude-sonnet-4-20250514";

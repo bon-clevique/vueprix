@@ -1,17 +1,5 @@
-import { describe, expect, it, beforeEach, afterEach } from 'vitest';
-import { promises as fs } from 'node:fs';
-import path from 'node:path';
-import os from 'node:os';
-import {
-  calcDropPercent,
-  isAlreadyPosted,
-  isGoodDeal,
-  loadPosted,
-  markAsPosted,
-  prunePosted,
-  savePosted,
-  type PostedRecord,
-} from './filter.js';
+import { describe, expect, it } from 'vitest';
+import { calcDropPercent, filterByActiveAsins, isGoodDeal } from './filter.js';
 
 describe('isGoodDeal', () => {
   it('returns true when drop meets default 15% threshold', () => {
@@ -49,101 +37,29 @@ describe('calcDropPercent', () => {
   });
 });
 
-describe('isAlreadyPosted', () => {
-  const now = new Date('2026-05-06T12:00:00.000Z');
-
-  it('returns false when asin not in record', () => {
-    expect(isAlreadyPosted('B000', {}, now)).toBe(false);
+describe('filterByActiveAsins', () => {
+  it('removes candidates whose asin is in the active set', () => {
+    const candidates = [{ asin: 'B001' }, { asin: 'B002' }, { asin: 'B003' }];
+    const active = new Set(['B002']);
+    expect(filterByActiveAsins(candidates, active)).toEqual([{ asin: 'B001' }, { asin: 'B003' }]);
   });
 
-  it('returns true within 24h cooldown', () => {
-    const posted: PostedRecord = { B000: '2026-05-06T00:00:00.000Z' }; // 12h ago
-    expect(isAlreadyPosted('B000', posted, now)).toBe(true);
+  it('returns all candidates when active set is empty', () => {
+    const candidates = [{ asin: 'B001' }, { asin: 'B002' }];
+    expect(filterByActiveAsins(candidates, new Set())).toEqual(candidates);
   });
 
-  it('returns false past 24h cooldown', () => {
-    const posted: PostedRecord = { B000: '2026-05-05T00:00:00.000Z' }; // 36h ago
-    expect(isAlreadyPosted('B000', posted, now)).toBe(false);
+  it('returns empty array when all candidates are active', () => {
+    const candidates = [{ asin: 'B001' }, { asin: 'B002' }];
+    const active = new Set(['B001', 'B002']);
+    expect(filterByActiveAsins(candidates, active)).toEqual([]);
   });
 
-  it('returns false on invalid timestamp', () => {
-    const posted: PostedRecord = { B000: 'not-a-date' };
-    expect(isAlreadyPosted('B000', posted, now)).toBe(false);
-  });
-});
-
-describe('markAsPosted', () => {
-  it('returns new record with iso timestamp', () => {
-    const now = new Date('2026-05-06T12:00:00.000Z');
-    const result = markAsPosted('B001', {}, now);
-    expect(result).toEqual({ B001: '2026-05-06T12:00:00.000Z' });
-  });
-
-  it('does not mutate the original record', () => {
-    const original: PostedRecord = { B000: '2026-05-05T00:00:00.000Z' };
-    const result = markAsPosted('B001', original, new Date('2026-05-06T12:00:00.000Z'));
-    expect(original).toEqual({ B000: '2026-05-05T00:00:00.000Z' });
-    expect(result).toHaveProperty('B000');
-    expect(result).toHaveProperty('B001');
-  });
-});
-
-describe('prunePosted', () => {
-  it('removes entries older than cooldown window', () => {
-    const now = new Date('2026-05-06T12:00:00.000Z');
-    const posted: PostedRecord = {
-      old: '2026-05-04T00:00:00.000Z', // 60h ago
-      recent: '2026-05-06T06:00:00.000Z', // 6h ago
-    };
-    const result = prunePosted(posted, now);
-    expect(result).toEqual({ recent: '2026-05-06T06:00:00.000Z' });
-  });
-
-  it('drops invalid timestamps', () => {
-    const now = new Date('2026-05-06T12:00:00.000Z');
-    const posted: PostedRecord = { bad: 'not-a-date' };
-    expect(prunePosted(posted, now)).toEqual({});
-  });
-});
-
-describe('loadPosted / savePosted', () => {
-  let tmpDir: string;
-  let tmpFile: string;
-
-  beforeEach(async () => {
-    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'vueprix-'));
-    tmpFile = path.join(tmpDir, 'posted.json');
-  });
-
-  afterEach(async () => {
-    await fs.rm(tmpDir, { recursive: true, force: true });
-  });
-
-  it('returns empty object when file does not exist', async () => {
-    const result = await loadPosted(tmpFile);
-    expect(result).toEqual({});
-  });
-
-  it('roundtrips data through save and load', async () => {
-    const data: PostedRecord = { B100: '2026-05-06T12:00:00.000Z' };
-    await savePosted(data, tmpFile);
-    const result = await loadPosted(tmpFile);
-    expect(result).toEqual(data);
-  });
-
-  it('returns empty object for non-object json', async () => {
-    await fs.writeFile(tmpFile, JSON.stringify(['not', 'an', 'object']), 'utf-8');
-    const result = await loadPosted(tmpFile);
-    expect(result).toEqual({});
-  });
-
-  it('overwrites existing data atomically (no tmp file remains on success)', async () => {
-    await savePosted({ A: '2026-05-06T00:00:00.000Z' }, tmpFile);
-    await savePosted({ B: '2026-05-06T01:00:00.000Z' }, tmpFile);
-    const result = await loadPosted(tmpFile);
-    expect(result).toEqual({ B: '2026-05-06T01:00:00.000Z' });
-    const entries = await fs.readdir(tmpDir);
-    const tmpLeftovers = entries.filter((e) => e.includes('.tmp.'));
-    expect(tmpLeftovers).toEqual([]);
+  it('does not mutate the input array', () => {
+    const candidates = [{ asin: 'B001' }, { asin: 'B002' }];
+    const active = new Set(['B001']);
+    const result = filterByActiveAsins(candidates, active);
+    expect(candidates).toHaveLength(2);
+    expect(result).not.toBe(candidates);
   });
 });

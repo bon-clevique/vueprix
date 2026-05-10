@@ -12,7 +12,9 @@ export interface PostHistoryEntry {
   currentPrice: number;
   referencePrice: number;
   dropPercent: number;
-  source: 'deals' | 'fixed';
+  // 'deals' / 'fixed' は draft 時のソース由来。
+  // 'publish' は Notion DB 経由で publish された場合 (元 source は Notion DB に保存されていないため遡及できない)。
+  source: 'deals' | 'fixed' | 'publish';
   category: NotionCategory;
   reason: string;
   dryRun: boolean;

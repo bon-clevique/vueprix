@@ -1,14 +1,14 @@
-name: vueprix-bot
+name: vueprix-draft
 
 # Required GitHub Actions secrets:
 #   KEEPA_API_KEY
 #   PAAPI_ACCESS_KEY, PAAPI_SECRET_KEY, PAAPI_PARTNER_TAG
 #   ANTHROPIC_API_KEY
-#   X_API_KEY, X_API_SECRET, X_ACCESS_TOKEN, X_ACCESS_TOKEN_SECRET
-#   BSKY_IDENTIFIER (or hardcode below), BSKY_PASSWORD
-#   NOTION_API_KEY (optional; 投稿文を Notion DB に集約する場合のみ)
-#   NOTION_VUEPRIX_DATA_SOURCE_ID (optional; 投稿文 DB の Database ID)
-#   NOTION_VUEPRIX_GUIDELINES_DATA_SOURCE_ID (optional; トーンガイドライン DB の data_source_id)
+#   NOTION_API_KEY, NOTION_VUEPRIX_DATA_SOURCE_ID
+#   NOTION_VUEPRIX_GUIDELINES_DATA_SOURCE_ID (optional)
+#
+# X / Bluesky 投稿は bot-publish.yml (repository_dispatch) 側で実行する。
+# 本 workflow は Notion DB に Status=pending_review の候補を書き込むだけ。
 
 on:
   schedule:
@@ -16,19 +16,19 @@ on:
   workflow_dispatch:
     inputs:
       dry_run:
-        description: 'Run without posting (true/false)'
+        description: 'Run without creating real drafts (true/false)'
         required: false
         default: 'true'
 
 permissions:
-  contents: write   # required to commit data/posted.json
+  contents: write   # post-history.jsonl の auto-commit のため (将来 artifact 化したら read に降格可)
 
 concurrency:
-  group: vueprix-bot
+  group: vueprix-draft
   cancel-in-progress: false
 
 jobs:
-  run-bot:
+  run-draft:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -41,7 +41,7 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Run bot
+      - name: Run draft pipeline
         env:
           KEEPA_API_KEY: ${{ secrets.KEEPA_API_KEY }}
           PAAPI_ACCESS_KEY: ${{ secrets.PAAPI_ACCESS_KEY }}
@@ -50,29 +50,23 @@ jobs:
           PAAPI_HOST: webservices.amazon.co.jp
           PAAPI_REGION: us-west-2
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-          X_API_KEY: ${{ secrets.X_API_KEY }}
-          X_API_SECRET: ${{ secrets.X_API_SECRET }}
-          X_ACCESS_TOKEN: ${{ secrets.X_ACCESS_TOKEN }}
-          X_ACCESS_TOKEN_SECRET: ${{ secrets.X_ACCESS_TOKEN_SECRET }}
-          BSKY_IDENTIFIER: ${{ secrets.BSKY_IDENTIFIER }}
-          BSKY_PASSWORD: ${{ secrets.BSKY_PASSWORD }}
           NOTION_API_KEY: ${{ secrets.NOTION_API_KEY }}
           NOTION_VUEPRIX_DATA_SOURCE_ID: ${{ secrets.NOTION_VUEPRIX_DATA_SOURCE_ID }}
           NOTION_VUEPRIX_GUIDELINES_DATA_SOURCE_ID: ${{ secrets.NOTION_VUEPRIX_GUIDELINES_DATA_SOURCE_ID }}
           DRY_RUN: ${{ github.event.inputs.dry_run || 'true' }}
           LOG_LEVEL: info
-        run: npm start
+        run: npm run draft
 
-      - name: Commit posted.json + post-history
+      - name: Commit post-history
         run: |
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Action"
-          git add data/posted.json data/post-history.jsonl
+          git add data/post-history.jsonl
           if git diff --staged --quiet; then
-            echo "no data/* changes"
+            echo "no data/post-history.jsonl changes"
             exit 0
           fi
-          git commit -m "chore: update posted.json + post-history [skip ci]"
+          git commit -m "chore: update post-history [skip ci]"
           for i in 1 2 3; do
             if ! git pull --rebase origin main; then
               echo "rebase failed (attempt $i)"

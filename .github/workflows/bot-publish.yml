@@ -1,0 +1,67 @@
+name: vueprix-publish
+
+# Triggered by Notion automation when a draft's Status changes to "approved".
+# Notion sends a repository_dispatch with event_type=vueprix-publish and
+# client_payload.page_id pointing at the approved row.
+#
+# Required secrets (same set as bot.yml plus X/Bluesky):
+#   KEEPA_API_KEY (unused at runtime, kept for parity if publish needs it later)
+#   PAAPI_ACCESS_KEY, PAAPI_SECRET_KEY, PAAPI_PARTNER_TAG
+#   ANTHROPIC_API_KEY (unused at runtime; reason 文は Notion から読む)
+#   X_API_KEY, X_API_SECRET, X_ACCESS_TOKEN, X_ACCESS_TOKEN_SECRET
+#   BSKY_IDENTIFIER, BSKY_PASSWORD
+#   NOTION_API_KEY, NOTION_VUEPRIX_DATA_SOURCE_ID
+
+on:
+  repository_dispatch:
+    types: [vueprix-publish]
+  workflow_dispatch:
+    inputs:
+      page_id:
+        description: 'Notion page ID to publish (manual retry)'
+        required: true
+
+permissions:
+  contents: read
+
+# 全体 serialize (page_id 単位ではなく global) で publish の race window を完全に閉じる。
+# Phase 11 architect review C1 対応。1 cron 20 件、publish 1 件あたり数秒程度の throughput 影響は許容。
+concurrency:
+  group: vueprix-publish-global
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version-file: .tool-versions
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Publish approved draft
+        env:
+          # CRIT-1 対応: page_id を ${{ }} で run: に直接展開すると script injection 余地あり。
+          # env var 経由でシェル変数として渡し、shell 側で正しく quote する。
+          PAGE_ID: ${{ github.event.client_payload.page_id || github.event.inputs.page_id }}
+          PAAPI_ACCESS_KEY: ${{ secrets.PAAPI_ACCESS_KEY }}
+          PAAPI_SECRET_KEY: ${{ secrets.PAAPI_SECRET_KEY }}
+          PAAPI_PARTNER_TAG: ${{ secrets.PAAPI_PARTNER_TAG }}
+          PAAPI_HOST: webservices.amazon.co.jp
+          PAAPI_REGION: us-west-2
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          X_API_KEY: ${{ secrets.X_API_KEY }}
+          X_API_SECRET: ${{ secrets.X_API_SECRET }}
+          X_ACCESS_TOKEN: ${{ secrets.X_ACCESS_TOKEN }}
+          X_ACCESS_TOKEN_SECRET: ${{ secrets.X_ACCESS_TOKEN_SECRET }}
+          BSKY_IDENTIFIER: ${{ secrets.BSKY_IDENTIFIER }}
+          BSKY_PASSWORD: ${{ secrets.BSKY_PASSWORD }}
+          NOTION_API_KEY: ${{ secrets.NOTION_API_KEY }}
+          NOTION_VUEPRIX_DATA_SOURCE_ID: ${{ secrets.NOTION_VUEPRIX_DATA_SOURCE_ID }}
+          LOG_LEVEL: info
+        run: npm run publish -- --page-id "$PAGE_ID"
