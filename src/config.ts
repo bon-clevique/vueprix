@@ -39,3 +39,13 @@ export const POST_HISTORY_PATH = "data/post-history.jsonl";
 
 export const CLAUDE_MODEL = "claude-sonnet-4-20250514";
 export const CLAUDE_MAX_TOKENS = 100;
+
+// pending_review → expired SLA。bon の手動承認猶予 (時間)。
+export const APPROVAL_SLA_HOURS = 10;
+
+// queryDuplicateAsins / expireOldDrafts の Notion paging 上限。
+// page_size=100 × MAX_QUERY_PAGES = 1000 件。到達時は warn ログ + 切り上げ (要拡張シグナル)。
+export const MAX_QUERY_PAGES = 10;
+
+// expireOldDrafts の件数閾値。これ以上の expire は運用異常 (bon の承認停滞 / 候補生成過多) として warn。
+export const EXPIRE_WARN_THRESHOLD = 5;
