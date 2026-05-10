@@ -1,243 +1,16 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
-import type { PostHistoryEntry } from './history.js';
 
 // Mock @notionhq/client at the module level — vi.mock is hoisted.
 const pagesCreateMock = vi.fn();
+const pagesUpdateMock = vi.fn();
+const pagesRetrieveMock = vi.fn();
 const dataSourcesQueryMock = vi.fn();
 vi.mock('@notionhq/client', () => ({
   Client: class MockClient {
-    pages = { create: pagesCreateMock };
+    pages = { create: pagesCreateMock, update: pagesUpdateMock, retrieve: pagesRetrieveMock };
     dataSources = { query: dataSourcesQueryMock };
   },
 }));
-
-const baseEntry = (overrides: Partial<PostHistoryEntry> = {}): PostHistoryEntry => ({
-  timestamp: '2026-05-09T12:00:00.000Z',
-  runId: 'r-1',
-  asin: 'B000',
-  title: 'sample product',
-  currentPrice: 850,
-  referencePrice: 1000,
-  dropPercent: 15,
-  source: 'fixed',
-  category: 'fixed-list',
-  reason: 'test reason',
-  dryRun: true,
-  posters: { x: true, bluesky: true },
-  ...overrides,
-});
-
-describe('appendPostToNotion', () => {
-  const originalKey = process.env.NOTION_API_KEY;
-  const originalDs = process.env.NOTION_VUEPRIX_DATA_SOURCE_ID;
-  const originalPartnerTag = process.env.PAAPI_PARTNER_TAG;
-
-  beforeEach(() => {
-    pagesCreateMock.mockReset();
-    delete process.env.NOTION_API_KEY;
-    delete process.env.NOTION_VUEPRIX_DATA_SOURCE_ID;
-    delete process.env.PAAPI_PARTNER_TAG;
-  });
-
-  afterEach(() => {
-    if (originalKey === undefined) delete process.env.NOTION_API_KEY;
-    else process.env.NOTION_API_KEY = originalKey;
-    if (originalDs === undefined) delete process.env.NOTION_VUEPRIX_DATA_SOURCE_ID;
-    else process.env.NOTION_VUEPRIX_DATA_SOURCE_ID = originalDs;
-    if (originalPartnerTag === undefined) delete process.env.PAAPI_PARTNER_TAG;
-    else process.env.PAAPI_PARTNER_TAG = originalPartnerTag;
-  });
-
-  it('skips when env not configured (no Notion call)', async () => {
-    const { appendPostToNotion } = await import('./notion.js');
-    await appendPostToNotion(baseEntry(), 'post text');
-    expect(pagesCreateMock).not.toHaveBeenCalled();
-  });
-
-  it('skips when only NOTION_API_KEY is set without data source id', async () => {
-    process.env.NOTION_API_KEY = 'secret_xxx';
-    const { appendPostToNotion } = await import('./notion.js');
-    await appendPostToNotion(baseEntry(), 'post text');
-    expect(pagesCreateMock).not.toHaveBeenCalled();
-  });
-
-  it('calls pages.create with expected database_id and properties when configured', async () => {
-    process.env.NOTION_API_KEY = 'secret_xxx';
-    process.env.NOTION_VUEPRIX_DATA_SOURCE_ID = 'ds-uuid-123';
-    pagesCreateMock.mockResolvedValueOnce({ id: 'page-1' });
-
-    const { appendPostToNotion } = await import('./notion.js');
-    await appendPostToNotion(
-      baseEntry({ title: 'カリタ コーヒーフィルター', reason: '朝のコーヒーに', dryRun: true }),
-      '【値下がり】カリタ...全文',
-    );
-
-    expect(pagesCreateMock).toHaveBeenCalledTimes(1);
-    const arg = pagesCreateMock.mock.calls[0]?.[0] as Record<string, unknown>;
-    expect(arg.parent).toEqual({ type: 'database_id', database_id: 'ds-uuid-123' });
-    const props = arg.properties as Record<string, unknown>;
-    expect(props['名前']).toBeDefined();
-    expect(props['理由']).toBeDefined();
-    expect(props.DryRun).toEqual({ checkbox: true });
-  });
-
-  it('prefixes [DRY RUN] in body when dryRun=true', async () => {
-    process.env.NOTION_API_KEY = 'secret_xxx';
-    process.env.NOTION_VUEPRIX_DATA_SOURCE_ID = 'ds-uuid-123';
-    pagesCreateMock.mockResolvedValueOnce({ id: 'page-1' });
-
-    const { appendPostToNotion } = await import('./notion.js');
-    await appendPostToNotion(baseEntry({ dryRun: true }), 'POST_BODY');
-
-    const arg = pagesCreateMock.mock.calls[0]?.[0] as { children: Array<{ paragraph: { rich_text: Array<{ text: { content: string } }> } }> };
-    const bodyContent = arg.children[0]?.paragraph.rich_text[0]?.text.content ?? '';
-    expect(bodyContent.startsWith('[DRY RUN]\n')).toBe(true);
-    expect(bodyContent).toContain('POST_BODY');
-  });
-
-  it('does not prefix [DRY RUN] when dryRun=false', async () => {
-    process.env.NOTION_API_KEY = 'secret_xxx';
-    process.env.NOTION_VUEPRIX_DATA_SOURCE_ID = 'ds-uuid-123';
-    pagesCreateMock.mockResolvedValueOnce({ id: 'page-1' });
-
-    const { appendPostToNotion } = await import('./notion.js');
-    await appendPostToNotion(baseEntry({ dryRun: false }), 'POST_BODY');
-
-    const arg = pagesCreateMock.mock.calls[0]?.[0] as { children: Array<{ paragraph: { rich_text: Array<{ text: { content: string } }> } }> };
-    const bodyContent = arg.children[0]?.paragraph.rich_text[0]?.text.content ?? '';
-    expect(bodyContent.startsWith('[DRY RUN]')).toBe(false);
-    expect(bodyContent).toBe('POST_BODY');
-  });
-
-  it('does not throw when Notion API fails (logs and continues)', async () => {
-    process.env.NOTION_API_KEY = 'secret_xxx';
-    process.env.NOTION_VUEPRIX_DATA_SOURCE_ID = 'ds-uuid-123';
-    pagesCreateMock.mockRejectedValueOnce(Object.assign(new Error('API unavailable'), { status: 503, code: 'service_unavailable' }));
-
-    const { appendPostToNotion } = await import('./notion.js');
-    await expect(appendPostToNotion(baseEntry(), 'POST_BODY')).resolves.toBeUndefined();
-  });
-
-  it('truncates very long title to 200 chars', async () => {
-    process.env.NOTION_API_KEY = 'secret_xxx';
-    process.env.NOTION_VUEPRIX_DATA_SOURCE_ID = 'ds-uuid-123';
-    pagesCreateMock.mockResolvedValueOnce({ id: 'page-1' });
-
-    const longTitle = 'あ'.repeat(500);
-    const { appendPostToNotion } = await import('./notion.js');
-    await appendPostToNotion(baseEntry({ title: longTitle }), 'body');
-
-    const arg = pagesCreateMock.mock.calls[0]?.[0] as { properties: { '名前': { title: Array<{ text: { content: string } }> } } };
-    const titleContent = arg.properties['名前'].title[0]?.text.content ?? '';
-    expect([...titleContent].length).toBeLessThanOrEqual(200);
-  });
-
-  it('does not split surrogate pairs (emoji / supplementary CJK)', async () => {
-    process.env.NOTION_API_KEY = 'secret_xxx';
-    process.env.NOTION_VUEPRIX_DATA_SOURCE_ID = 'ds-uuid-123';
-    pagesCreateMock.mockResolvedValueOnce({ id: 'page-1' });
-
-    // 😀 = 1 grapheme but 2 UTF-16 code units. naive slice() at odd boundary breaks it.
-    const emojiTitle = '😀'.repeat(300);
-    const { appendPostToNotion } = await import('./notion.js');
-    await appendPostToNotion(baseEntry({ title: emojiTitle }), 'body');
-
-    const arg = pagesCreateMock.mock.calls[0]?.[0] as { properties: { '名前': { title: Array<{ text: { content: string } }> } } };
-    const titleContent = arg.properties['名前'].title[0]?.text.content ?? '';
-    // 結果は 200 文字 (絵文字数) 以内で、replacement char (U+FFFD) を含まない
-    expect([...titleContent].length).toBeLessThanOrEqual(200);
-    expect(titleContent).not.toContain('�');
-  });
-
-  it('sets all 12 properties (名前, 理由, ASIN, Amazon URL, 通常価格, セール価格, 割引率, カテゴリ, サクラチェッカーURL, 候補生成日時, Status, DryRun)', async () => {
-    process.env.NOTION_API_KEY = 'secret_xxx';
-    process.env.NOTION_VUEPRIX_DATA_SOURCE_ID = 'ds-uuid-123';
-    process.env.PAAPI_PARTNER_TAG = 'vueprix-22';
-    pagesCreateMock.mockResolvedValueOnce({ id: 'page-1' });
-
-    const { appendPostToNotion } = await import('./notion.js');
-    await appendPostToNotion(
-      baseEntry({
-        asin: 'B0FKLMMS2G',
-        currentPrice: 3569,
-        referencePrice: 8609,
-        dropPercent: 59,
-        dryRun: true,
-        category: 'food',
-        timestamp: '2026-05-09T12:00:00.000Z',
-      }),
-      'POST_BODY',
-    );
-
-    expect(pagesCreateMock).toHaveBeenCalledTimes(1);
-    const arg = pagesCreateMock.mock.calls[0]?.[0] as { properties: Record<string, unknown> };
-    const props = arg.properties;
-
-    // existence check for 名前 / 理由 (existing assertion preserved)
-    expect(props['名前']).toBeDefined();
-    expect(props['理由']).toBeDefined();
-
-    // ASIN: rich_text content === 'B0FKLMMS2G'
-    const asinProp = props.ASIN as { rich_text: Array<{ text: { content: string } }> };
-    expect(asinProp.rich_text[0]?.text.content).toBe('B0FKLMMS2G');
-
-    // Amazon URL: affiliate URL with partner tag
-    expect(props['Amazon URL']).toEqual({ url: 'https://www.amazon.co.jp/dp/B0FKLMMS2G?tag=vueprix-22' });
-
-    // numeric properties
-    expect(props['通常価格']).toEqual({ number: 8609 });
-    expect(props['セール価格']).toEqual({ number: 3569 });
-    expect(props['割引率']).toEqual({ number: 0.59 });
-
-    // select properties
-    expect(props['カテゴリ']).toEqual({ select: { name: 'food' } });
-    expect(props.Status).toEqual({ select: { name: 'pending_review' } });
-
-    // url & date properties
-    expect(props['サクラチェッカーURL']).toEqual({ url: 'https://sakura-checker.jp/search/B0FKLMMS2G/' });
-    expect(props['候補生成日時']).toEqual({ date: { start: '2026-05-09T12:00:00.000Z' } });
-
-    // checkbox
-    expect(props.DryRun).toEqual({ checkbox: true });
-  });
-
-  it('uses entry.category for カテゴリ select (food/health/fixed-list)', async () => {
-    process.env.NOTION_API_KEY = 'secret_xxx';
-    process.env.NOTION_VUEPRIX_DATA_SOURCE_ID = 'ds-uuid-123';
-    process.env.PAAPI_PARTNER_TAG = 'vueprix-22';
-
-    const { appendPostToNotion } = await import('./notion.js');
-    const categories: Array<'food' | 'health' | 'fixed-list'> = ['food', 'health', 'fixed-list'];
-
-    for (const category of categories) {
-      pagesCreateMock.mockResolvedValueOnce({ id: `page-${category}` });
-      await appendPostToNotion(baseEntry({ category }), 'POST_BODY');
-    }
-
-    expect(pagesCreateMock).toHaveBeenCalledTimes(3);
-    const callArgs = pagesCreateMock.mock.calls.map(
-      (call) => (call[0] as { properties: Record<string, unknown> }).properties,
-    );
-    expect((callArgs[0]?.['カテゴリ'])).toEqual({ select: { name: 'food' } });
-    expect((callArgs[1]?.['カテゴリ'])).toEqual({ select: { name: 'health' } });
-    expect((callArgs[2]?.['カテゴリ'])).toEqual({ select: { name: 'fixed-list' } });
-  });
-
-  it('Amazon URL is null when PAAPI_PARTNER_TAG is not set', async () => {
-    process.env.NOTION_API_KEY = 'secret_xxx';
-    process.env.NOTION_VUEPRIX_DATA_SOURCE_ID = 'ds-uuid-123';
-    delete process.env.PAAPI_PARTNER_TAG;
-    pagesCreateMock.mockResolvedValueOnce({ id: 'page-1' });
-
-    const { appendPostToNotion } = await import('./notion.js');
-    await appendPostToNotion(baseEntry({ asin: 'B0FKLMMS2G' }), 'POST_BODY');
-
-    // fail-soft: page creation still succeeds (mock invoked)
-    expect(pagesCreateMock).toHaveBeenCalledTimes(1);
-    const arg = pagesCreateMock.mock.calls[0]?.[0] as { properties: Record<string, unknown> };
-    expect(arg.properties['Amazon URL']).toEqual({ url: null });
-  });
-});
 
 describe('fetchActiveGuidelines', () => {
   const originalKey = process.env.NOTION_API_KEY;
@@ -339,5 +112,326 @@ describe('fetchActiveGuidelines', () => {
     );
     const { fetchActiveGuidelines } = await import('./notion.js');
     await expect(fetchActiveGuidelines()).resolves.toEqual([]);
+  });
+});
+
+describe('createDraftPage', () => {
+  const originalKey = process.env.NOTION_API_KEY;
+  const originalDs = process.env.NOTION_VUEPRIX_DATA_SOURCE_ID;
+
+  beforeEach(() => {
+    pagesCreateMock.mockReset();
+    process.env.NOTION_API_KEY = 'secret_xxx';
+    process.env.NOTION_VUEPRIX_DATA_SOURCE_ID = 'ds-uuid-123';
+  });
+
+  afterEach(() => {
+    if (originalKey === undefined) delete process.env.NOTION_API_KEY;
+    else process.env.NOTION_API_KEY = originalKey;
+    if (originalDs === undefined) delete process.env.NOTION_VUEPRIX_DATA_SOURCE_ID;
+    else process.env.NOTION_VUEPRIX_DATA_SOURCE_ID = originalDs;
+  });
+
+  it('creates page with Status=pending_review and returns page id', async () => {
+    pagesCreateMock.mockResolvedValueOnce({ id: 'page-abc' });
+    const { createDraftPage } = await import('./notion.js');
+    const id = await createDraftPage({
+      asin: 'B0FKLMMS2G',
+      title: 'sample',
+      postTextX: 'X text',
+      postTextBluesky: 'Bluesky text',
+      reason: 'reason',
+      amazonUrl: 'https://www.amazon.co.jp/dp/B0FKLMMS2G?tag=t-22',
+      currentPrice: 850,
+      referencePrice: 1000,
+      dropPercent: 15,
+      category: 'food',
+      dryRun: false,
+      generatedAt: new Date('2026-05-09T12:00:00.000Z'),
+    });
+    expect(id).toBe('page-abc');
+    expect(pagesCreateMock).toHaveBeenCalledTimes(1);
+    const arg = pagesCreateMock.mock.calls[0]?.[0] as { properties: Record<string, unknown> };
+    expect(arg.properties.Status).toEqual({ select: { name: 'pending_review' } });
+    expect(arg.properties.ASIN).toEqual({ rich_text: [{ type: 'text', text: { content: 'B0FKLMMS2G' } }] });
+    expect(arg.properties['投稿文_X']).toEqual({ rich_text: [{ type: 'text', text: { content: 'X text' } }] });
+    expect(arg.properties['投稿文_Bluesky']).toEqual({ rich_text: [{ type: 'text', text: { content: 'Bluesky text' } }] });
+    expect(arg.properties['Amazon URL']).toEqual({ url: 'https://www.amazon.co.jp/dp/B0FKLMMS2G?tag=t-22' });
+    expect(arg.properties['通常価格']).toEqual({ number: 1000 });
+    expect(arg.properties['セール価格']).toEqual({ number: 850 });
+    expect(arg.properties['割引率']).toEqual({ number: 0.15 });
+    expect(arg.properties['カテゴリ']).toEqual({ select: { name: 'food' } });
+    expect(arg.properties['サクラチェッカーURL']).toEqual({ url: 'https://sakura-checker.jp/search/B0FKLMMS2G/' });
+    expect(arg.properties['候補生成日時']).toEqual({ date: { start: '2026-05-09T12:00:00.000Z' } });
+    expect(arg.properties.DryRun).toEqual({ checkbox: false });
+  });
+
+  it('throws when env not configured', async () => {
+    delete process.env.NOTION_API_KEY;
+    delete process.env.NOTION_VUEPRIX_DATA_SOURCE_ID;
+    const { createDraftPage } = await import('./notion.js');
+    await expect(
+      createDraftPage({
+        asin: 'B0',
+        title: 't',
+        postTextX: 'x',
+        postTextBluesky: 'b',
+        reason: 'r',
+        amazonUrl: null,
+        currentPrice: 0,
+        referencePrice: 0,
+        dropPercent: 0,
+        category: 'food',
+        dryRun: false,
+        generatedAt: new Date(),
+      }),
+    ).rejects.toThrow();
+  });
+});
+
+describe('updateStatusToPosted', () => {
+  const originalKey = process.env.NOTION_API_KEY;
+  const originalDs = process.env.NOTION_VUEPRIX_DATA_SOURCE_ID;
+
+  beforeEach(() => {
+    pagesUpdateMock.mockReset();
+    process.env.NOTION_API_KEY = 'secret_xxx';
+    process.env.NOTION_VUEPRIX_DATA_SOURCE_ID = 'ds-uuid-123';
+  });
+
+  afterEach(() => {
+    if (originalKey === undefined) delete process.env.NOTION_API_KEY;
+    else process.env.NOTION_API_KEY = originalKey;
+    if (originalDs === undefined) delete process.env.NOTION_VUEPRIX_DATA_SOURCE_ID;
+    else process.env.NOTION_VUEPRIX_DATA_SOURCE_ID = originalDs;
+  });
+
+  it('updates Status=posted with 投稿日時 timestamp', async () => {
+    pagesUpdateMock.mockResolvedValueOnce({});
+    const { updateStatusToPosted } = await import('./notion.js');
+    await updateStatusToPosted('page-1', new Date('2026-05-09T14:00:00.000Z'));
+    expect(pagesUpdateMock).toHaveBeenCalledTimes(1);
+    const arg = pagesUpdateMock.mock.calls[0]?.[0] as { page_id: string; properties: Record<string, unknown> };
+    expect(arg.page_id).toBe('page-1');
+    expect(arg.properties.Status).toEqual({ select: { name: 'posted' } });
+    expect(arg.properties['投稿日時']).toEqual({ date: { start: '2026-05-09T14:00:00.000Z' } });
+  });
+});
+
+describe('fetchPageById', () => {
+  const originalKey = process.env.NOTION_API_KEY;
+  const originalDs = process.env.NOTION_VUEPRIX_DATA_SOURCE_ID;
+
+  beforeEach(() => {
+    pagesRetrieveMock.mockReset();
+    process.env.NOTION_API_KEY = 'secret_xxx';
+    process.env.NOTION_VUEPRIX_DATA_SOURCE_ID = 'ds-uuid-123';
+  });
+
+  afterEach(() => {
+    if (originalKey === undefined) delete process.env.NOTION_API_KEY;
+    else process.env.NOTION_API_KEY = originalKey;
+    if (originalDs === undefined) delete process.env.NOTION_VUEPRIX_DATA_SOURCE_ID;
+    else process.env.NOTION_VUEPRIX_DATA_SOURCE_ID = originalDs;
+  });
+
+  const buildPage = (status: string, overrides: Record<string, unknown> = {}) => ({
+    id: 'page-1',
+    properties: {
+      Status: { select: { name: status } },
+      ASIN: { rich_text: [{ plain_text: 'B0FKL' }] },
+      '名前': { title: [{ plain_text: 'sample title' }] },
+      '投稿文_X': { rich_text: [{ plain_text: 'X text' }] },
+      '投稿文_Bluesky': { rich_text: [{ plain_text: 'Bluesky text' }] },
+      '理由': { rich_text: [{ plain_text: 'reason' }] },
+      'Amazon URL': { url: 'https://amzn.example/B0FKL' },
+      'セール価格': { number: 850 },
+      '通常価格': { number: 1000 },
+      '割引率': { number: 0.15 },
+      'カテゴリ': { select: { name: 'food' } },
+      DryRun: { checkbox: false },
+      ...overrides,
+    },
+  });
+
+  it('returns DraftPayload when Status=approved', async () => {
+    pagesRetrieveMock.mockResolvedValueOnce(buildPage('approved'));
+    const { fetchPageById } = await import('./notion.js');
+    const payload = await fetchPageById('page-1');
+    expect(payload).toEqual({
+      pageId: 'page-1',
+      asin: 'B0FKL',
+      title: 'sample title',
+      postTextX: 'X text',
+      postTextBluesky: 'Bluesky text',
+      reason: 'reason',
+      amazonUrl: 'https://amzn.example/B0FKL',
+      currentPrice: 850,
+      referencePrice: 1000,
+      dropPercent: 15,
+      category: 'food',
+      status: 'approved',
+      dryRun: false,
+    });
+  });
+
+  it('throws when Status is not approved (e.g. pending_review)', async () => {
+    pagesRetrieveMock.mockResolvedValueOnce(buildPage('pending_review'));
+    const { fetchPageById } = await import('./notion.js');
+    await expect(fetchPageById('page-1')).rejects.toThrow(/pending_review/);
+  });
+
+  it('throws when Status=posted (二重投稿防止 hook)', async () => {
+    pagesRetrieveMock.mockResolvedValueOnce(buildPage('posted'));
+    const { fetchPageById } = await import('./notion.js');
+    await expect(fetchPageById('page-1')).rejects.toThrow(/posted/);
+  });
+
+  it('preserves dryRun=true from page', async () => {
+    pagesRetrieveMock.mockResolvedValueOnce(buildPage('approved', { DryRun: { checkbox: true } }));
+    const { fetchPageById } = await import('./notion.js');
+    const payload = await fetchPageById('page-1');
+    expect(payload.dryRun).toBe(true);
+  });
+});
+
+describe('queryDuplicateAsins', () => {
+  const originalKey = process.env.NOTION_API_KEY;
+  const originalDs = process.env.NOTION_VUEPRIX_DATA_SOURCE_ID;
+
+  beforeEach(() => {
+    dataSourcesQueryMock.mockReset();
+    process.env.NOTION_API_KEY = 'secret_xxx';
+    process.env.NOTION_VUEPRIX_DATA_SOURCE_ID = 'ds-uuid-123';
+  });
+
+  afterEach(() => {
+    if (originalKey === undefined) delete process.env.NOTION_API_KEY;
+    else process.env.NOTION_API_KEY = originalKey;
+    if (originalDs === undefined) delete process.env.NOTION_VUEPRIX_DATA_SOURCE_ID;
+    else process.env.NOTION_VUEPRIX_DATA_SOURCE_ID = originalDs;
+  });
+
+  it('returns empty set when env not configured', async () => {
+    delete process.env.NOTION_API_KEY;
+    delete process.env.NOTION_VUEPRIX_DATA_SOURCE_ID;
+    const { queryDuplicateAsins } = await import('./notion.js');
+    const result = await queryDuplicateAsins(new Date());
+    expect(result).toEqual(new Set());
+    expect(dataSourcesQueryMock).not.toHaveBeenCalled();
+  });
+
+  it('queries with Status filter (pending_review/approved/posted) and returns asin set', async () => {
+    dataSourcesQueryMock.mockResolvedValueOnce({
+      results: [
+        { id: 'p1', properties: { ASIN: { rich_text: [{ plain_text: 'B001' }] } } },
+        { id: 'p2', properties: { ASIN: { rich_text: [{ plain_text: 'B002' }] } } },
+      ],
+      has_more: false,
+    });
+    const { queryDuplicateAsins } = await import('./notion.js');
+    const result = await queryDuplicateAsins(new Date('2026-05-09T12:00:00.000Z'));
+    expect(result).toEqual(new Set(['B001', 'B002']));
+    const arg = dataSourcesQueryMock.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(arg.data_source_id).toBe('ds-uuid-123');
+    const filter = arg.filter as { and: Array<{ or?: Array<{ property: string; select?: { equals: string } }>; property?: string; date?: { on_or_after: string } }> };
+    expect(filter.and).toHaveLength(2);
+    expect(filter.and[0]?.or).toEqual([
+      { property: 'Status', select: { equals: 'pending_review' } },
+      { property: 'Status', select: { equals: 'approved' } },
+      { property: 'Status', select: { equals: 'posted' } },
+    ]);
+    expect(filter.and[1]?.property).toBe('候補生成日時');
+  });
+
+  it('paginates when has_more=true', async () => {
+    dataSourcesQueryMock
+      .mockResolvedValueOnce({
+        results: [{ id: 'p1', properties: { ASIN: { rich_text: [{ plain_text: 'B001' }] } } }],
+        has_more: true,
+        next_cursor: 'cursor-2',
+      })
+      .mockResolvedValueOnce({
+        results: [{ id: 'p2', properties: { ASIN: { rich_text: [{ plain_text: 'B002' }] } } }],
+        has_more: false,
+      });
+    const { queryDuplicateAsins } = await import('./notion.js');
+    const result = await queryDuplicateAsins(new Date());
+    expect(result).toEqual(new Set(['B001', 'B002']));
+    expect(dataSourcesQueryMock).toHaveBeenCalledTimes(2);
+    const secondArg = dataSourcesQueryMock.mock.calls[1]?.[0] as { start_cursor?: string };
+    expect(secondArg.start_cursor).toBe('cursor-2');
+  });
+});
+
+describe('expireOldDrafts', () => {
+  const originalKey = process.env.NOTION_API_KEY;
+  const originalDs = process.env.NOTION_VUEPRIX_DATA_SOURCE_ID;
+
+  beforeEach(() => {
+    dataSourcesQueryMock.mockReset();
+    pagesUpdateMock.mockReset();
+    pagesRetrieveMock.mockReset();
+    process.env.NOTION_API_KEY = 'secret_xxx';
+    process.env.NOTION_VUEPRIX_DATA_SOURCE_ID = 'ds-uuid-123';
+  });
+
+  afterEach(() => {
+    if (originalKey === undefined) delete process.env.NOTION_API_KEY;
+    else process.env.NOTION_API_KEY = originalKey;
+    if (originalDs === undefined) delete process.env.NOTION_VUEPRIX_DATA_SOURCE_ID;
+    else process.env.NOTION_VUEPRIX_DATA_SOURCE_ID = originalDs;
+  });
+
+  const buildPendingReviewPage = (id: string) => ({
+    id,
+    properties: { Status: { select: { name: 'pending_review' } } },
+  });
+
+  it('queries pending_review older than slaHours and updates each to expired', async () => {
+    const now = new Date('2026-05-09T12:00:00.000Z');
+    dataSourcesQueryMock.mockResolvedValueOnce({
+      results: [{ id: 'p-old-1', properties: {} }, { id: 'p-old-2', properties: {} }],
+      has_more: false,
+    });
+    // C2: updateStatusToExpired は retrieve→check→update の 2-step
+    pagesRetrieveMock.mockResolvedValue(buildPendingReviewPage('p-old-1'));
+    pagesUpdateMock.mockResolvedValue({});
+    const { expireOldDrafts } = await import('./notion.js');
+    const count = await expireOldDrafts(now, 10);
+    expect(count).toBe(2);
+    expect(pagesUpdateMock).toHaveBeenCalledTimes(2);
+    expect(pagesRetrieveMock).toHaveBeenCalledTimes(2);
+    const arg = dataSourcesQueryMock.mock.calls[0]?.[0] as { filter: { and: Array<{ property: string; select?: { equals: string }; date?: { before: string } }> } };
+    expect(arg.filter.and[0]?.select).toEqual({ equals: 'pending_review' });
+    expect(arg.filter.and[1]?.date?.before).toBe('2026-05-09T02:00:00.000Z');
+    const updateArg = pagesUpdateMock.mock.calls[0]?.[0] as { properties: Record<string, unknown> };
+    expect(updateArg.properties.Status).toEqual({ select: { name: 'expired' } });
+  });
+
+  it('returns 0 when no candidates match', async () => {
+    dataSourcesQueryMock.mockResolvedValueOnce({ results: [], has_more: false });
+    const { expireOldDrafts } = await import('./notion.js');
+    const count = await expireOldDrafts(new Date());
+    expect(count).toBe(0);
+    expect(pagesUpdateMock).not.toHaveBeenCalled();
+  });
+
+  it('skips update when status changed to approved between query and update (C2 race fix)', async () => {
+    dataSourcesQueryMock.mockResolvedValueOnce({
+      results: [{ id: 'p-1', properties: {} }],
+      has_more: false,
+    });
+    // human が直前に approved に変えたケースを想定 — retrieve 時点では approved
+    pagesRetrieveMock.mockResolvedValueOnce({
+      id: 'p-1',
+      properties: { Status: { select: { name: 'approved' } } },
+    });
+    const { expireOldDrafts } = await import('./notion.js');
+    const count = await expireOldDrafts(new Date());
+    expect(count).toBe(1); // 検出件数は 1
+    expect(pagesRetrieveMock).toHaveBeenCalledTimes(1);
+    // しかし update は呼ばれない (silent loss 防止)
+    expect(pagesUpdateMock).not.toHaveBeenCalled();
   });
 });

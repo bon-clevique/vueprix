@@ -5,28 +5,26 @@ import { loadBlocklist } from './blocklist.js';
 import { CATEGORY_FIXED, mapKeepaCategoryToNotion, type NotionCategory } from './category.js';
 import { generateReason } from './claude.js';
 import {
+  BSKY_MAX_CHARS,
+  DROP_THRESHOLD_PERCENT,
   FIXED_ASINS,
   KEEPA_CATEGORIES,
   MAX_POSTS_PER_RUN,
   MIN_PRICE_YEN,
-  DROP_THRESHOLD_PERCENT,
   X_MAX_CHARS,
 } from './config.js';
-import {
-  calcDropPercent,
-  isAlreadyPosted,
-  isGoodDeal,
-  loadPosted,
-  markAsPosted,
-  prunePosted,
-  savePosted,
-} from './filter.js';
-import { appendHistory } from './history.js';
+import { calcDropPercent, isGoodDeal } from './filter.js';
 import { checkAsin, getDeals } from './keepa.js';
 import { logger } from './logger.js';
-import { appendPostToNotion, fetchActiveGuidelines } from './notion.js';
+import {
+  createDraftPage,
+  expireOldDrafts,
+  fetchActiveGuidelines,
+  queryDuplicateAsins,
+  type DraftCandidate,
+} from './notion.js';
 import { getItems, type ProductInfo } from './paapi.js';
-import { anySucceeded, buildPostText, dispatch, posters, type PostInput } from './posters/index.js';
+import { buildPostText, type PostInput } from './posters/index.js';
 
 interface Candidate {
   asin: string;
@@ -66,7 +64,7 @@ const collectDeals = async (): Promise<Candidate[]> => {
         });
       }
     } catch (err) {
-      logger.error('index', 'getDeals failed', {
+      logger.error('draft', 'getDeals failed', {
         categoryId,
         error: err instanceof Error ? err.message : String(err),
       });
@@ -95,7 +93,7 @@ const collectFixed = async (): Promise<Candidate[]> => {
         category: CATEGORY_FIXED,
       });
     } catch (err) {
-      logger.error('index', 'checkAsin failed', {
+      logger.error('draft', 'checkAsin failed', {
         asin,
         error: err instanceof Error ? err.message : String(err),
       });
@@ -117,50 +115,48 @@ const dedupe = (candidates: Candidate[]): Candidate[] => {
 
 const isDryRunFlag = (): boolean => (process.env.DRY_RUN ?? 'true').toLowerCase() !== 'false';
 
-const main = async (): Promise<void> => {
+export const main = async (): Promise<void> => {
   const startedAt = new Date();
   const runId = `${startedAt.getTime()}-${randomBytes(2).toString('hex')}`;
-  // PartnerTag は本 bot の前提条件 (Amazon アソシエイト本登録 = 最低限必要)。
-  // 早期 fail で「Keepa token を消費する前に deployment 設定誤りを検知」する意図で main 冒頭で validate。
   const partnerTag = requirePartnerTag();
-  logger.info('index', 'run started', {
+  const dryRun = isDryRunFlag();
+  logger.info('draft', 'run started', {
     startedAt: startedAt.toISOString(),
     runId,
-    dryRun: process.env.DRY_RUN ?? 'true',
+    dryRun,
   });
 
-  // Notion 由来の動的ガイドラインと git 管理の blocklist を main 冒頭で並列取得。
-  // 失敗時は両方とも空コレクションで継続 (fail-soft)。
-  const [blocklist, guidelines] = await Promise.all([
+  // 古い pending_review を expire してから候補生成 (Notion DB の鮮度保証)。
+  const expired = await expireOldDrafts(startedAt);
+  logger.info('draft', 'expired old drafts', { count: expired });
+
+  const [blocklist, guidelines, activeAsins] = await Promise.all([
     loadBlocklist(),
     fetchActiveGuidelines(),
+    queryDuplicateAsins(startedAt),
   ]);
 
   const dealCandidates = await collectDeals();
   const fixedCandidates = await collectFixed();
-  logger.info('index', 'candidates collected', {
+  logger.info('draft', 'candidates collected', {
     deals: dealCandidates.length,
     fixed: fixedCandidates.length,
   });
 
-  let posted = await loadPosted();
-  posted = prunePosted(posted, startedAt);
-
   const merged = dedupe([...fixedCandidates, ...dealCandidates]);
   const afterBlocklist = merged.filter((c) => !blocklist.has(c.asin));
-  const filtered = afterBlocklist.filter((c) => !isAlreadyPosted(c.asin, posted, startedAt));
+  const filtered = afterBlocklist.filter((c) => !activeAsins.has(c.asin));
   const targets = filtered.slice(0, MAX_POSTS_PER_RUN);
-  logger.info('index', 'targets selected', {
+  logger.info('draft', 'targets selected', {
     afterDedupe: merged.length,
     afterBlocklist: afterBlocklist.length,
-    afterCooldown: filtered.length,
-    willPost: targets.length,
+    afterActive: filtered.length,
+    willDraft: targets.length,
     guidelines: guidelines.length,
   });
 
   if (targets.length === 0) {
-    await savePosted(posted);
-    logger.info('index', 'no targets, run finished');
+    logger.info('draft', 'no targets, run finished');
     return;
   }
 
@@ -169,20 +165,16 @@ const main = async (): Promise<void> => {
   try {
     paapiProducts = await getItems(targets.map((t) => t.asin));
   } catch (err) {
-    logger.warn('index', 'PA-API getItems failed, falling back to Keepa-only', {
+    logger.warn('draft', 'PA-API getItems failed, falling back to Keepa-only', {
       error: err instanceof Error ? err.message : String(err),
     });
   }
 
   const paapiByAsin = new Map(paapiProducts.map((p) => [p.asin, p]));
-  let postedCount = 0;
-  let fallbackCount = 0;
+  let draftedCount = 0;
 
   for (const target of targets) {
     const product = paapiByAsin.get(target.asin) ?? buildKeepaProduct(target, partnerTag);
-    if (!paapiByAsin.has(target.asin)) {
-      fallbackCount += 1;
-    }
     const reason = await generateReason(product, target.dropPercent, guidelines);
     const input: PostInput = {
       product,
@@ -190,48 +182,49 @@ const main = async (): Promise<void> => {
       referencePrice: target.referencePrice,
       dropPercent: target.dropPercent,
     };
-    const result = await dispatch(posters, input);
-    const historyEntry = {
-      timestamp: new Date().toISOString(),
-      runId,
+    const postTextX = buildPostText(input, X_MAX_CHARS);
+    const postTextBluesky = buildPostText(input, BSKY_MAX_CHARS);
+    const draft: DraftCandidate = {
       asin: target.asin,
       title: product.title,
+      postTextX,
+      postTextBluesky,
+      reason,
+      amazonUrl: buildAffiliateUrl(target.asin, partnerTag),
       currentPrice: product.currentPrice,
       referencePrice: target.referencePrice,
       dropPercent: target.dropPercent,
-      source: target.source,
       category: target.category,
-      reason,
-      dryRun: isDryRunFlag(),
-      posters: result,
+      dryRun,
+      generatedAt: new Date(),
     };
-    await appendHistory(historyEntry);
-    const postText = buildPostText(input, X_MAX_CHARS);
-    await appendPostToNotion(historyEntry, postText);
-    if (anySucceeded(result)) {
-      posted = markAsPosted(target.asin, posted, new Date());
-      postedCount += 1;
-    } else {
-      logger.warn('index', 'all posters failed, leaving asin out of cooldown', {
+    try {
+      const pageId = await createDraftPage(draft);
+      logger.info('draft', 'page created', { asin: target.asin, pageId });
+      draftedCount += 1;
+    } catch (err) {
+      logger.error('draft', 'createDraftPage failed', {
         asin: target.asin,
-        result,
+        error: err instanceof Error ? err.message : String(err),
       });
     }
   }
 
-  await savePosted(posted);
-  logger.info('index', 'run finished', {
+  logger.info('draft', 'run finished', {
     durationMs: Date.now() - startedAt.getTime(),
     targets: targets.length,
-    posted: postedCount,
-    keepaFallback: fallbackCount,
+    drafted: draftedCount,
+    expired,
   });
 };
 
-main().catch((err) => {
-  logger.error('index', 'fatal error', {
-    error: err instanceof Error ? err.message : String(err),
-    stack: err instanceof Error ? err.stack : undefined,
+// vitest 実行中は main() を自動起動しない (test がモジュールを import する際の副作用回避)。
+if (!process.env.VITEST) {
+  main().catch((err) => {
+    logger.error('draft', 'fatal error', {
+      error: err instanceof Error ? err.message : String(err),
+      stack: err instanceof Error ? err.stack : undefined,
+    });
+    process.exit(1);
   });
-  process.exit(1);
-});
+}
