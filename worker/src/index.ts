@@ -76,11 +76,9 @@ const handler = {
     //    GitHub error body to Notion to avoid leaking PAT-scope info to log
     //    aggregators that may capture Notion automation responses.
     if (!ghRes.ok) {
-      const text = await ghRes.text();
-      console.error('GitHub dispatch failed', {
-        status: ghRes.status,
-        text,
-      });
+      // GitHub error body は logging しない (PAT fragment 等の機微情報が含まれる可能性)。
+      // status code のみ log し、必要なら GitHub の audit log を別途確認する。
+      console.error('GitHub dispatch failed', { status: ghRes.status });
       return new Response(`GitHub dispatch failed: ${ghRes.status}`, {
         status: 502,
       });
@@ -96,14 +94,25 @@ const handler = {
 export default handler;
 
 /**
- * Constant-time string comparison. Length-mismatch returns early but only
- * leaks "length differs" rather than which byte differs.
+ * Constant-time string comparison.
+ *
+ * Pad shorter string so the loop always runs maxLen iterations.
+ * Leaks neither length nor character position via response timing.
+ *
+ * Note: `charCodeAt` で out-of-bounds index は NaN を返す。NaN を XOR に
+ * 渡すと 32-bit int 化で 0 扱いになるが、意図を明確化するため明示的に
+ * Number.isNaN チェックで 0 へ fallback する (`?? 0` は null/undefined
+ * 専用で NaN には triggered しないため使えない)。
  */
 export function timingSafeEqual(a: string, b: string): boolean {
-  if (a.length !== b.length) return false;
-  let diff = 0;
-  for (let i = 0; i < a.length; i++) {
-    diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  const maxLen = Math.max(a.length, b.length);
+  // length mismatch poisons diff so equal-length-but-different and
+  // unequal-length both return false without an early-exit timing channel.
+  let diff = a.length === b.length ? 0 : 1;
+  for (let i = 0; i < maxLen; i++) {
+    const ac = a.charCodeAt(i);
+    const bc = b.charCodeAt(i);
+    diff |= (Number.isNaN(ac) ? 0 : ac) ^ (Number.isNaN(bc) ? 0 : bc);
   }
   return diff === 0;
 }

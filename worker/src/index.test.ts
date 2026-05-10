@@ -51,6 +51,22 @@ describe('timingSafeEqual', () => {
   it('returns false for strings of different length', () => {
     expect(timingSafeEqual('abc', 'abcd')).toBe(false);
   });
+
+  it('returns false for prefix match (a is prefix of b)', () => {
+    expect(timingSafeEqual('shared-secret-xy', 'shared-secret-xyz')).toBe(
+      false,
+    );
+  });
+
+  it('returns false for prefix match (b is prefix of a)', () => {
+    expect(timingSafeEqual('shared-secret-xyz', 'shared-secret-xy')).toBe(
+      false,
+    );
+  });
+
+  it('returns false even when shorter string matches completely', () => {
+    expect(timingSafeEqual('abc', 'abcdefghij')).toBe(false);
+  });
 });
 
 describe('webhook proxy fetch handler', () => {
