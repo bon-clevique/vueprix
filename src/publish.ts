@@ -139,8 +139,8 @@ export const main = async (argv: readonly string[]): Promise<void> => {
         });
       }
     } catch (err) {
-      // failure tracking 自体の失敗は publish の主目的を妨げない (warn のみ)。
-      logger.error('publish', 'failure count update failed', {
+      // failure tracking 自体の失敗は publish の主目的を妨げない (non-fatal)。
+      logger.warn('publish', 'failure count update failed (non-fatal)', {
         pageId: args.pageId,
         error: err instanceof Error ? err.message : String(err),
       });
