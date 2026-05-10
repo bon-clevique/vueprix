@@ -105,7 +105,7 @@ CRIT-1 (page_id script injection) は PR #17 で env var 経由化により閉�
 3. NOTION_API_KEY / NOTION_VUEPRIX_DATA_SOURCE_ID が GitHub secrets に設定されているか
 
 ### 二重発火対策
-- `bot-publish.yml` の `concurrency` group は `vueprix-publish-${{ page_id }}` で page 単位に絞っている → 同 page への重複発火は直列化される
+- `bot-publish.yml` の `concurrency` group は `vueprix-publish-global` (workflow-global serialize) で page 単位ではなく workflow 全体で 1 並行のみに絞っている → これにより同 page の重複だけでなく異なる page 同士の race も完全防止。throughput 影響は 1 cron 20 件程度なので許容範囲
 - `fetchPageById` は Status=`approved` 以外で throw → posted 後の再発火は early return される (二重投稿防止 hook)
 - Status を間違えて approved に戻した場合は手動で修正、または再 publish を許容するなら no-op とみなす
 
@@ -129,6 +129,13 @@ CRIT-1 (page_id script injection) は PR #17 で env var 経由化により閉�
 1. 元 row は `posted` のまま放置 (history 保全)
 2. 新規 row を duplicate で作成: Notion DB で対象 row を選択 → 「複製」 → 新 row の Status を `pending_review` にし「投稿日時」を空に戻し「候補生成日時」を現在時刻に更新 → bon が承認 → publish 動線で再投稿
 3. 重複投稿リスクを抑えたいなら `posted.json` (asin 単位の履歴) との突合で COOLDOWN_HOURS=72 を考慮 (`queryDuplicateAsins` 経由で draft 段階の重複は自動回避される)
+
+### post-history.jsonl の扱い
+
+PR #17 までは GitHub Actions が main へ git commit して累積していたが、
+PR-2 (artifact 化) 以降は audit-only として各 run 独立の artifact (90 日保持) に変更。
+重複除去は Notion DB の queryDuplicateAsins が SoT で、post-history.jsonl は
+使用しない。過去の累積データは git history に残る。
 
 ## 関連ファイル
 

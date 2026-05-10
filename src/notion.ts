@@ -327,11 +327,13 @@ const extractCheckbox = (prop: unknown): boolean => {
   return (prop as { checkbox?: boolean }).checkbox ?? false;
 };
 
-// Notion date property の date.start を ISO 文字列で返す。未設定 / null は null。
+// Notion date property の date.start を ISO 文字列で返す。未設定 / null / 空文字は全て null。
+// 空文字も null に coerce する理由: publish.ts の `if (payload.postedAt)` ガードを
+// 空文字 (falsy だが string) で擦り抜けさせない (二重投稿防止 hook の補強)。
 const extractDate = (prop: unknown): string | null => {
   if (!prop || typeof prop !== 'object') return null;
   const date = (prop as { date?: { start?: string | null } | null }).date;
-  return date?.start ?? null;
+  return date?.start || null;
 };
 
 // C2 対応: expire と human approval の race を防ぐため retrieve→check→update の 2-step (compare-and-set 相当)。

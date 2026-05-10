@@ -293,6 +293,17 @@ describe('fetchPageById', () => {
     expect(payload.postedAt).toBeNull();
   });
 
+  it('postedAt is null when 投稿日時 date.start is empty string (publish guard reinforcement)', async () => {
+    pagesRetrieveMock.mockResolvedValueOnce(
+      buildPage('approved', {
+        '投稿日時': { date: { start: '' } },
+      }),
+    );
+    const { fetchPageById } = await import('./notion.js');
+    const payload = await fetchPageById('page-1');
+    expect(payload.postedAt).toBeNull();
+  });
+
   it('throws on unknown Status value (membership check via type guard)', async () => {
     pagesRetrieveMock.mockResolvedValueOnce(buildPage('weird_value'));
     const { fetchPageById } = await import('./notion.js');

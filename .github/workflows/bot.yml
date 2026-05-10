@@ -60,6 +60,10 @@ jobs:
       # post-history.jsonl は artifact として upload する (旧 git auto-commit 方式を廃止)。
       # 理由: contents: write 権限を削るため + auto-commit による push race を排除。
       # 90 日 retention で監査ログ用途には十分。長期解析が必要になったら別途集約 job を追加する。
+      #
+      # post-history.jsonl は audit-only。重複除去は Notion DB の queryDuplicateAsins
+      # が SoT のため、cross-run 継続性は不要。各 run の artifact は独立 snapshot で
+      # 90 日保持する設計 (PR-2 で git commit から artifact upload に移行)。
       - name: Upload post-history artifact
         if: always()
         uses: actions/upload-artifact@v4
