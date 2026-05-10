@@ -77,16 +77,51 @@ describe('publish entrypoint', () => {
     expect(arg.properties.Status).toEqual({ select: { name: 'posted' } });
   });
 
-  it('does not mark Status=posted when all posters fail', async () => {
+  it('does not mark Status=posted when all posters fail, but increments failure count', async () => {
+    // fetchPageById の retrieve + incrementFailureCount の retrieve の 2 回分
     pagesRetrieveMock.mockResolvedValueOnce(buildApprovedPage());
+    pagesRetrieveMock.mockResolvedValueOnce({
+      id: 'page-1',
+      properties: { '投稿失敗回数': { number: 0 } },
+    });
+    pagesUpdateMock.mockResolvedValueOnce({});
     xPostMock.mockRejectedValueOnce(new Error('x failed'));
     blueskyPostMock.mockRejectedValueOnce(new Error('bsky failed'));
     const { main } = await import('./publish.js');
     await main(['node', 'publish.ts', '--page-id', '0123456789abcdef0123456789abcdef']);
     // history は append される (失敗記録)
     expect(appendHistoryMock).toHaveBeenCalledTimes(1);
-    // updateStatusToPosted は呼ばれない (approved のまま残す)
-    expect(pagesUpdateMock).not.toHaveBeenCalled();
+    // updateStatusToPosted は呼ばれない (approved のまま残す)。
+    // ただし incrementFailureCount の update が 1 回呼ばれる。
+    expect(pagesUpdateMock).toHaveBeenCalledTimes(1);
+    const arg = pagesUpdateMock.mock.calls[0]?.[0] as { properties: Record<string, unknown> };
+    // failure count = 1 (前回 0 + 1)、blocked 未到達なので Status update なし
+    expect(arg.properties['投稿失敗回数']).toEqual({ number: 1 });
+    expect(arg.properties.Status).toBeUndefined();
+    // 最終エラー は dispatch result (poster→bool map) の JSON 文字列
+    const richText = arg.properties['最終エラー'] as {
+      rich_text: Array<{ text: { content: string } }>;
+    };
+    const content = richText.rich_text[0]?.text.content ?? '';
+    expect(content).toBe('{"x":false,"bluesky":false}');
+  });
+
+  it('transitions Status=blocked after MAX_PUBLISH_FAILURES (3rd consecutive failure)', async () => {
+    pagesRetrieveMock.mockResolvedValueOnce(buildApprovedPage());
+    // 既に 2 回失敗済 → 3 回目で blocked
+    pagesRetrieveMock.mockResolvedValueOnce({
+      id: 'page-1',
+      properties: { '投稿失敗回数': { number: 2 } },
+    });
+    pagesUpdateMock.mockResolvedValueOnce({});
+    xPostMock.mockRejectedValueOnce(new Error('x failed'));
+    blueskyPostMock.mockRejectedValueOnce(new Error('bsky failed'));
+    const { main } = await import('./publish.js');
+    await main(['node', 'publish.ts', '--page-id', '0123456789abcdef0123456789abcdef']);
+    expect(pagesUpdateMock).toHaveBeenCalledTimes(1);
+    const arg = pagesUpdateMock.mock.calls[0]?.[0] as { properties: Record<string, unknown> };
+    expect(arg.properties['投稿失敗回数']).toEqual({ number: 3 });
+    expect(arg.properties.Status).toEqual({ select: { name: 'blocked' } });
   });
 
   it('marks Status=posted when at least one poster succeeds', async () => {

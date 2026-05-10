@@ -361,6 +361,97 @@ describe('fetchPageById', () => {
   });
 });
 
+describe('incrementFailureCount', () => {
+  const originalKey = process.env.NOTION_API_KEY;
+  const originalDs = process.env.NOTION_VUEPRIX_DATA_SOURCE_ID;
+
+  beforeEach(() => {
+    pagesUpdateMock.mockReset();
+    pagesRetrieveMock.mockReset();
+    process.env.NOTION_API_KEY = 'secret_xxx';
+    process.env.NOTION_VUEPRIX_DATA_SOURCE_ID = 'ds-uuid-123';
+  });
+
+  afterEach(() => {
+    if (originalKey === undefined) delete process.env.NOTION_API_KEY;
+    else process.env.NOTION_API_KEY = originalKey;
+    if (originalDs === undefined) delete process.env.NOTION_VUEPRIX_DATA_SOURCE_ID;
+    else process.env.NOTION_VUEPRIX_DATA_SOURCE_ID = originalDs;
+  });
+
+  it('first failure (0 → 1): returns blocked=false, no Status update, writes count + error message', async () => {
+    pagesRetrieveMock.mockResolvedValueOnce({
+      id: 'page-1',
+      properties: { '投稿失敗回数': { number: 0 } },
+    });
+    pagesUpdateMock.mockResolvedValueOnce({});
+    const { incrementFailureCount } = await import('./notion.js');
+    const result = await incrementFailureCount('page-1', 'x: timeout, bsky: 401');
+    expect(result).toEqual({ count: 1, blocked: false });
+    expect(pagesUpdateMock).toHaveBeenCalledTimes(1);
+    const arg = pagesUpdateMock.mock.calls[0]?.[0] as {
+      page_id: string;
+      properties: Record<string, unknown>;
+    };
+    expect(arg.page_id).toBe('page-1');
+    expect(arg.properties['投稿失敗回数']).toEqual({ number: 1 });
+    expect(arg.properties['最終エラー']).toEqual({
+      rich_text: [{ type: 'text', text: { content: 'x: timeout, bsky: 401' } }],
+    });
+    // blocked=false なので Status update は出力されない
+    expect(arg.properties.Status).toBeUndefined();
+  });
+
+  it('third failure (2 → 3): returns blocked=true, sets Status=blocked, count=3', async () => {
+    pagesRetrieveMock.mockResolvedValueOnce({
+      id: 'page-1',
+      properties: { '投稿失敗回数': { number: 2 } },
+    });
+    pagesUpdateMock.mockResolvedValueOnce({});
+    const { incrementFailureCount } = await import('./notion.js');
+    const result = await incrementFailureCount('page-1', 'x: 500, bsky: 500');
+    expect(result).toEqual({ count: 3, blocked: true });
+    const arg = pagesUpdateMock.mock.calls[0]?.[0] as { properties: Record<string, unknown> };
+    expect(arg.properties['投稿失敗回数']).toEqual({ number: 3 });
+    expect(arg.properties.Status).toEqual({ select: { name: 'blocked' } });
+  });
+
+  it('treats missing 投稿失敗回数 property as 0 baseline', async () => {
+    pagesRetrieveMock.mockResolvedValueOnce({ id: 'page-1', properties: {} });
+    pagesUpdateMock.mockResolvedValueOnce({});
+    const { incrementFailureCount } = await import('./notion.js');
+    const result = await incrementFailureCount('page-1', 'first failure ever');
+    expect(result).toEqual({ count: 1, blocked: false });
+  });
+
+  it('truncates very long error messages to NOTION_TEXT_LIMIT (1900) on rich_text content', async () => {
+    pagesRetrieveMock.mockResolvedValueOnce({
+      id: 'page-1',
+      properties: { '投稿失敗回数': { number: 0 } },
+    });
+    pagesUpdateMock.mockResolvedValueOnce({});
+    const longMessage = 'a'.repeat(3000);
+    const { incrementFailureCount } = await import('./notion.js');
+    await incrementFailureCount('page-1', longMessage);
+    const arg = pagesUpdateMock.mock.calls[0]?.[0] as { properties: Record<string, unknown> };
+    const richText = arg.properties['最終エラー'] as {
+      rich_text: Array<{ text: { content: string } }>;
+    };
+    const content = richText.rich_text[0]?.text.content ?? '';
+    expect([...content].length).toBeLessThanOrEqual(1900);
+    expect(content.endsWith('…')).toBe(true);
+  });
+
+  it('falls back to count=0 baseline when retrieve fails (still increments to 1)', async () => {
+    pagesRetrieveMock.mockRejectedValueOnce(new Error('network glitch'));
+    pagesUpdateMock.mockResolvedValueOnce({});
+    const { incrementFailureCount } = await import('./notion.js');
+    const result = await incrementFailureCount('page-1', 'oops');
+    expect(result).toEqual({ count: 1, blocked: false });
+    expect(pagesUpdateMock).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe('queryDuplicateAsins', () => {
   const originalKey = process.env.NOTION_API_KEY;
   const originalDs = process.env.NOTION_VUEPRIX_DATA_SOURCE_ID;

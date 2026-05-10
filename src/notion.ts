@@ -4,17 +4,18 @@ import {
   APPROVAL_SLA_HOURS,
   COOLDOWN_HOURS,
   EXPIRE_WARN_THRESHOLD,
+  MAX_PUBLISH_FAILURES,
   MAX_QUERY_PAGES,
 } from './config.js';
 import { logger } from './logger.js';
 
-// Notion DB「vueprix 投稿文」schema (Phase 1 で 2026-05-09 に拡張済):
+// Notion DB「vueprix 投稿文」schema (Phase 1 で 2026-05-09 / 2026-05-10 に拡張済):
 //   - 名前 (title): 商品名
 //   - 理由 (rich_text): Claude 生成 reason
 //   - ASIN (rich_text)
 //   - 投稿文_X (rich_text)
 //   - 投稿文_Bluesky (rich_text)
-//   - Status (select: pending_review/approved/rejected/posted/expired)
+//   - Status (select: pending_review/approved/rejected/posted/expired/blocked)
 //   - 候補生成日時 (date)
 //   - 投稿日時 (date)
 //   - サクラチェッカーURL (url)
@@ -23,6 +24,8 @@ import { logger } from './logger.js';
 //   - 割引率 (number, percent)
 //   - カテゴリ (select: food/health/pc-desk/gaming/audio/fixed-list)
 //   - DryRun (checkbox)
+//   - 投稿失敗回数 (number): publish 失敗連続カウンタ。MAX_PUBLISH_FAILURES に達すると Status=blocked
+//   - 最終エラー (rich_text): 直近の publish 失敗内容 (truncate 1900)
 //   - 関連ガイドライン (relation, optional)
 //
 // 環境変数:
@@ -59,6 +62,7 @@ export const STATUS = {
   REJECTED: 'rejected',
   POSTED: 'posted',
   EXPIRED: 'expired',
+  BLOCKED: 'blocked',
 } as const;
 export type Status = (typeof STATUS)[keyof typeof STATUS];
 
@@ -334,6 +338,46 @@ const extractDate = (prop: unknown): string | null => {
   if (!prop || typeof prop !== 'object') return null;
   const date = (prop as { date?: { start?: string | null } | null }).date;
   return date?.start || null;
+};
+
+// 全 poster 失敗時の Notion 状態同期。retrieve で現在の「投稿失敗回数」を取得し +1、
+// 「最終エラー」に直近の failure detail を rich_text で書き込む。新カウントが MAX_PUBLISH_FAILURES
+// (= 3) に達した場合は同 update で Status=blocked にも遷移させる (operator が後で再開可能)。
+//
+// retrieve 失敗時はカウンタを 0 として fallback する (publish の失敗ログより Notion の整合性を優先)。
+// blocked 遷移済 page を再度 increment しても number は単調増加するが、Status=blocked は idempotent。
+export const incrementFailureCount = async (
+  pageId: string,
+  errorMessage: string,
+): Promise<{ count: number; blocked: boolean }> => {
+  const client = buildClient();
+  let previousCount = 0;
+  try {
+    const page = (await client.pages.retrieve({ page_id: pageId })) as unknown as NotionPageRich;
+    previousCount = extractNumber(page.properties['投稿失敗回数']);
+  } catch (err) {
+    // retrieve 失敗時は previousCount=0 のまま (publish 側の失敗ログを優先する)。
+    logger.warn('notion', 'failure count retrieve failed, using 0 as baseline', {
+      pageId,
+      type: err instanceof Error ? err.constructor.name : typeof err,
+    });
+  }
+  const nextCount = previousCount + 1;
+  const blocked = nextCount >= MAX_PUBLISH_FAILURES;
+  const baseProperties = {
+    '投稿失敗回数': { number: nextCount },
+    '最終エラー': {
+      rich_text: [{ type: 'text' as const, text: { content: truncate(errorMessage) } }],
+    },
+  };
+  await client.pages.update({
+    page_id: pageId,
+    properties: blocked
+      ? { ...baseProperties, Status: { select: { name: STATUS.BLOCKED } } }
+      : baseProperties,
+  });
+  logger.info('notion', 'failure count incremented', { pageId, count: nextCount, blocked });
+  return { count: nextCount, blocked };
 };
 
 // C2 対応: expire と human approval の race を防ぐため retrieve→check→update の 2-step (compare-and-set 相当)。
