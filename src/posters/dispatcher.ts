@@ -1,7 +1,12 @@
 import { logger } from '../logger.js';
 import type { Poster, PostInput } from './types.js';
 
-export type PostResult = Record<string, boolean>;
+export interface PosterOutcome {
+  ok: boolean;
+  url?: string;
+}
+
+export type PostResult = Record<string, PosterOutcome>;
 
 export const dispatch = async (posters: Poster[], input: PostInput): Promise<PostResult> => {
   const settled = await Promise.allSettled(posters.map((p) => p.post(input)));
@@ -9,9 +14,10 @@ export const dispatch = async (posters: Poster[], input: PostInput): Promise<Pos
   posters.forEach((p, i) => {
     const r = settled[i];
     if (r && r.status === 'fulfilled') {
-      result[p.name] = true;
+      const out = r.value ?? {};
+      result[p.name] = out.url ? { ok: true, url: out.url } : { ok: true };
     } else {
-      result[p.name] = false;
+      result[p.name] = { ok: false };
       const reason = r && r.status === 'rejected' ? r.reason : new Error('unknown failure');
       logger.error('poster.dispatcher', `${p.name} post failed`, {
         asin: input.asin,
@@ -23,4 +29,4 @@ export const dispatch = async (posters: Poster[], input: PostInput): Promise<Pos
 };
 
 export const anySucceeded = (result: PostResult): boolean =>
-  Object.values(result).some((ok) => ok);
+  Object.values(result).some((r) => r.ok);

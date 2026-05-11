@@ -5,10 +5,12 @@ const pagesCreateMock = vi.fn();
 const pagesUpdateMock = vi.fn();
 const pagesRetrieveMock = vi.fn();
 const dataSourcesQueryMock = vi.fn();
+const blocksAppendMock = vi.fn();
 vi.mock('@notionhq/client', () => ({
   Client: class MockClient {
     pages = { create: pagesCreateMock, update: pagesUpdateMock, retrieve: pagesRetrieveMock };
     dataSources = { query: dataSourcesQueryMock };
+    blocks = { children: { append: blocksAppendMock } };
   },
 }));
 
@@ -92,6 +94,7 @@ describe('updateStatusToPosted', () => {
 
   beforeEach(() => {
     pagesUpdateMock.mockReset();
+    blocksAppendMock.mockReset();
     process.env.NOTION_API_KEY = 'secret_xxx';
     process.env.NOTION_VUEPRIX_DATA_SOURCE_ID = 'ds-uuid-123';
   });
@@ -113,6 +116,47 @@ describe('updateStatusToPosted', () => {
     // PR-8: Status は status type
     expect(arg.properties.Status).toEqual({ status: { name: 'posted' } });
     expect(arg.properties['投稿日時']).toEqual({ date: { start: '2026-05-09T14:00:00.000Z' } });
+    // links 未指定なら bookmark append は呼ばれない
+    expect(blocksAppendMock).not.toHaveBeenCalled();
+  });
+
+  it('appends X / Bluesky bookmark blocks when links are provided', async () => {
+    pagesUpdateMock.mockResolvedValueOnce({});
+    blocksAppendMock.mockResolvedValueOnce({});
+    const { updateStatusToPosted } = await import('./notion.js');
+    await updateStatusToPosted('page-1', new Date('2026-05-09T14:00:00.000Z'), {
+      x: 'https://twitter.com/i/web/status/123',
+      bluesky: 'https://bsky.app/profile/vueprix.bsky.social/post/abc',
+    });
+    expect(blocksAppendMock).toHaveBeenCalledTimes(1);
+    const arg = blocksAppendMock.mock.calls[0]?.[0] as {
+      block_id: string;
+      children: Array<{ type: string; bookmark: { url: string } }>;
+    };
+    expect(arg.block_id).toBe('page-1');
+    expect(arg.children).toEqual([
+      { object: 'block', type: 'bookmark', bookmark: { url: 'https://twitter.com/i/web/status/123' } },
+      { object: 'block', type: 'bookmark', bookmark: { url: 'https://bsky.app/profile/vueprix.bsky.social/post/abc' } },
+    ]);
+  });
+
+  it('appends only the available link when one poster URL is missing', async () => {
+    pagesUpdateMock.mockResolvedValueOnce({});
+    blocksAppendMock.mockResolvedValueOnce({});
+    const { updateStatusToPosted } = await import('./notion.js');
+    await updateStatusToPosted('page-1', new Date('2026-05-09T14:00:00.000Z'), {
+      x: 'https://twitter.com/i/web/status/123',
+    });
+    expect(blocksAppendMock).toHaveBeenCalledTimes(1);
+    const arg = blocksAppendMock.mock.calls[0]?.[0] as { children: unknown[] };
+    expect(arg.children).toHaveLength(1);
+  });
+
+  it('does not call blocks.append when no links are provided', async () => {
+    pagesUpdateMock.mockResolvedValueOnce({});
+    const { updateStatusToPosted } = await import('./notion.js');
+    await updateStatusToPosted('page-1', new Date('2026-05-09T14:00:00.000Z'), {});
+    expect(blocksAppendMock).not.toHaveBeenCalled();
   });
 });
 

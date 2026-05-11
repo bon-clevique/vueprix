@@ -2,10 +2,12 @@ import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 
 const pagesUpdateMock = vi.fn();
 const pagesRetrieveMock = vi.fn();
+const blocksAppendMock = vi.fn();
 vi.mock('@notionhq/client', () => ({
   Client: class {
     pages = { create: vi.fn(), update: pagesUpdateMock, retrieve: pagesRetrieveMock };
     dataSources = { query: vi.fn() };
+    blocks = { children: { append: blocksAppendMock } };
   },
 }));
 
@@ -30,6 +32,7 @@ describe('publish entrypoint', () => {
   beforeEach(() => {
     pagesUpdateMock.mockReset();
     pagesRetrieveMock.mockReset();
+    blocksAppendMock.mockReset();
     xPostMock.mockReset();
     blueskyPostMock.mockReset();
     appendHistoryMock.mockReset();
@@ -100,6 +103,39 @@ describe('publish entrypoint', () => {
     expect(pagesUpdateMock).toHaveBeenCalledTimes(1);
     const arg = pagesUpdateMock.mock.calls[0]?.[0] as { properties: Record<string, unknown> };
     expect(arg.properties.Status).toEqual({ status: { name: 'posted' } });
+  });
+
+  it('appends X / Bluesky bookmark blocks to the Notion page after posting', async () => {
+    pagesRetrieveMock.mockResolvedValueOnce(buildApprovedPage());
+    pagesUpdateMock.mockResolvedValueOnce({});
+    blocksAppendMock.mockResolvedValueOnce({});
+    xPostMock.mockResolvedValueOnce({ url: 'https://twitter.com/i/web/status/111' });
+    blueskyPostMock.mockResolvedValueOnce({ url: 'https://bsky.app/profile/vueprix.bsky.social/post/222' });
+    const { main } = await import('./publish.js');
+    await main(['node', 'publish.ts', '--page-id', '0123456789abcdef0123456789abcdef']);
+    expect(blocksAppendMock).toHaveBeenCalledTimes(1);
+    const arg = blocksAppendMock.mock.calls[0]?.[0] as {
+      block_id: string;
+      children: Array<{ type: string; bookmark: { url: string } }>;
+    };
+    expect(arg.block_id).toBe('0123456789abcdef0123456789abcdef');
+    expect(arg.children.map((c) => c.bookmark.url)).toEqual([
+      'https://twitter.com/i/web/status/111',
+      'https://bsky.app/profile/vueprix.bsky.social/post/222',
+    ]);
+  });
+
+  it('appends only the X bookmark when Bluesky fails', async () => {
+    pagesRetrieveMock.mockResolvedValueOnce(buildApprovedPage());
+    pagesUpdateMock.mockResolvedValueOnce({});
+    blocksAppendMock.mockResolvedValueOnce({});
+    xPostMock.mockResolvedValueOnce({ url: 'https://twitter.com/i/web/status/111' });
+    blueskyPostMock.mockRejectedValueOnce(new Error('bsky down'));
+    const { main } = await import('./publish.js');
+    await main(['node', 'publish.ts', '--page-id', '0123456789abcdef0123456789abcdef']);
+    expect(blocksAppendMock).toHaveBeenCalledTimes(1);
+    const arg = blocksAppendMock.mock.calls[0]?.[0] as { children: unknown[] };
+    expect(arg.children).toHaveLength(1);
   });
 
   it('returns early without throwing when page is not approved', async () => {
