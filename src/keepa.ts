@@ -1,5 +1,5 @@
 import axios from 'axios';
-import { KEEPA_DOMAIN, HISTORY_DAYS } from './config.js';
+import { KEEPA_DEAL_SORT_TYPE, KEEPA_DOMAIN, HISTORY_DAYS } from './config.js';
 import { logger } from './logger.js';
 
 const KEEPA_BASE = 'https://api.keepa.com';
@@ -82,7 +82,10 @@ export const parseDeal = (d: KeepaDealsItem): Deal | null => {
   return { asin: d.asin, title, currentPrice: current, referencePrice: avg, dropPercent };
 };
 
-export const getDeals = async (categoryId: number): Promise<Deal[]> => {
+export const getDeals = async (
+  categoryId: number,
+  sortType: number = KEEPA_DEAL_SORT_TYPE,
+): Promise<Deal[]> => {
   // Keepa Browsing Deals API: POST /deal with DealRequest JSON body.
   // Reference: keepacom/api_backend Request.java#getDealsRequest
   // (r.path = "deal", r.postData = gson.toJson(dealRequest))
@@ -96,7 +99,7 @@ export const getDeals = async (categoryId: number): Promise<Deal[]> => {
     deltaRange: [1500, 100000],
     deltaPercentRange: [15, 100],
     isFilterEnabled: true,
-    sortType: 4,
+    sortType,
     dateRange: 0,
   };
   const res = await axios.post<KeepaDealsResponse>(url, dealRequest, {

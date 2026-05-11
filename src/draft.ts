@@ -4,7 +4,7 @@ import { buildAffiliateUrl, requirePartnerTag } from './affiliate.js';
 import { loadBlocklist } from './blocklist.js';
 import { CATEGORY_FIXED, mapKeepaCategoryToNotion, type NotionCategory } from './category.js';
 import {
-  CATEGORY_PRIORITY,
+  CATEGORY_QUOTA,
   DROP_THRESHOLD_PERCENT,
   FIXED_ASINS,
   KEEPA_CATEGORIES,
@@ -20,6 +20,7 @@ import {
   type DraftCandidate,
 } from './notion.js';
 import { getItems, type ProductInfo } from './paapi.js';
+import { passesTitleWhitelist } from './title-filter.js';
 
 export interface Candidate {
   asin: string;
@@ -48,6 +49,14 @@ const collectDeals = async (): Promise<Candidate[]> => {
       for (const d of deals) {
         if (d.currentPrice < MIN_PRICE_YEN) continue;
         if (!isGoodDeal(d.currentPrice, d.referencePrice)) continue;
+        if (!passesTitleWhitelist(category, d.title)) {
+          logger.debug('draft', 'dropped by title whitelist', {
+            asin: d.asin,
+            category,
+            title: d.title,
+          });
+          continue;
+        }
         candidates.push({
           asin: d.asin,
           title: d.title,
@@ -108,18 +117,29 @@ const dedupe = (candidates: Candidate[]): Candidate[] => {
   return result;
 };
 
-const CATEGORY_RANK: ReadonlyMap<NotionCategory, number> = new Map(
-  CATEGORY_PRIORITY.map((cat, idx) => [cat, idx]),
-);
-
-export const sortByPriority = (candidates: readonly Candidate[]): Candidate[] => {
-  const rank = (c: Candidate): number =>
-    CATEGORY_RANK.get(c.category) ?? CATEGORY_PRIORITY.length;
-  return [...candidates].sort((a, b) => {
-    const r = rank(a) - rank(b);
-    if (r !== 0) return r;
-    return b.dropPercent - a.dropPercent;
-  });
+// Keepa deals 由来候補を CATEGORY_QUOTA に基づいて選別する。
+// - カテゴリ毎に dropPercent 降順で並べ、上位から quota 件数まで採用。
+// - 1 カテゴリが quota に満たない場合でも他カテゴリへ再分配しない (fail-safe)。
+// - fixed-list は quota 対象外 (本関数は呼び出し前に除外しておく)。
+export const selectByQuota = (
+  candidates: readonly Candidate[],
+  quota: Readonly<Record<NotionCategory, number>> = CATEGORY_QUOTA,
+): Candidate[] => {
+  const byCategory = new Map<NotionCategory, Candidate[]>();
+  for (const c of candidates) {
+    const list = byCategory.get(c.category) ?? [];
+    list.push(c);
+    byCategory.set(c.category, list);
+  }
+  const selected: Candidate[] = [];
+  for (const [category, list] of byCategory) {
+    const cap = quota[category] ?? 0;
+    if (cap <= 0) continue;
+    const sorted = [...list].sort((a, b) => b.dropPercent - a.dropPercent);
+    selected.push(...sorted.slice(0, cap));
+  }
+  // 決定性確保のため、最終結果も dropPercent 降順で安定化。
+  return selected.sort((a, b) => b.dropPercent - a.dropPercent);
 };
 
 export const main = async (): Promise<void> => {
@@ -143,16 +163,22 @@ export const main = async (): Promise<void> => {
     fixed: fixedCandidates.length,
   });
 
+  // dedupe は fixed を優先 (同 ASIN なら fixed として残す)。
   const merged = dedupe([...fixedCandidates, ...dealCandidates]);
   const afterBlocklist = merged.filter((c) => !blocklist.has(c.asin));
   // filter.ts の helper に統一 (旧: inline filter で同義実装の重複)。
   const filtered = filterByActiveAsins(afterBlocklist, activeAsins);
-  const sorted = sortByPriority(filtered);
-  const targets = sorted.slice(0, MAX_POSTS_PER_RUN);
+  // fixed は quota 対象外で全件採用。deals は CATEGORY_QUOTA で枠分配。
+  const fixedTargets = filtered.filter((c) => c.source === 'fixed');
+  const dealTargets = selectByQuota(filtered.filter((c) => c.source === 'deals'));
+  // safety cap (PA-API / Notion 連打抑制)。通常は CATEGORY_QUOTA 合計 + #fixed 以下に収まる想定。
+  const targets = [...fixedTargets, ...dealTargets].slice(0, MAX_POSTS_PER_RUN);
   logger.info('draft', 'targets selected', {
     afterDedupe: merged.length,
     afterBlocklist: afterBlocklist.length,
     afterActive: filtered.length,
+    fixedTargets: fixedTargets.length,
+    dealTargets: dealTargets.length,
     willDraft: targets.length,
   });
 

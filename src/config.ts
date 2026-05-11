@@ -18,6 +18,8 @@ export const FIXED_ASINS: readonly string[] = [
 //   2127209051 → パソコン・周辺機器 (6.4M, pc-desk)
 //   637394     → ゲーム (489K, gaming)
 //   3477981    → イヤホン・ヘッドホン本体 (93K, audio)
+//   3833931    → ホーム&キッチン > キッチン用品 (TBD: verify, kitchen)
+//   86893051   → 文房具・オフィス用品 (TBD: verify, stationery)
 export const KEEPA_DOMAIN = 5;
 export const KEEPA_CATEGORIES: readonly number[] = [
   57239051,
@@ -25,24 +27,44 @@ export const KEEPA_CATEGORIES: readonly number[] = [
   2127209051,
   637394,
   3477981,
+  3833931,
+  86893051,
 ];
 
-// Notion ドラフト候補のソート順 (左ほど優先)。
-// fixed-list = FIXED_ASINS 由来の個別優先商品 (常に最優先)。
-// それ以外は Keepa カテゴリ。ガジェット系 (pc-desk/gaming/audio) を食品より優先。
+// Keepa /deal sortType: 1 = 値下率の高い順 (試験運用、要 A/B)。
+// 旧: 4 (deal score) はジャンク商品が混ざりやすかったため、より明示的なシグナルに変更。
+export const KEEPA_DEAL_SORT_TYPE = 1;
+
+// カテゴリごとの draft 上限 (Keepa deals 由来のみ。FIXED_ASINS はこの枠外で別途追加される)。
+// 合計 20 枠。1 カテゴリが空でも他に再分配しない (fail-safe / シンプル運用)。
+export const CATEGORY_QUOTA: Record<NotionCategory, number> = {
+  food: 5,
+  health: 3,
+  kitchen: 3,
+  stationery: 3,
+  'pc-desk': 3,
+  audio: 2,
+  gaming: 1,
+  'fixed-list': 0, // quota 対象外 (FIXED_ASINS は別経路で追加)
+};
+
+// quota 配分内のタイブレークと、quota 外で fixed を上に積む際の参考順序。
 export const CATEGORY_PRIORITY: readonly NotionCategory[] = [
   'fixed-list',
-  'pc-desk',
-  'gaming',
-  'audio',
-  'health',
   'food',
+  'health',
+  'kitchen',
+  'stationery',
+  'pc-desk',
+  'audio',
+  'gaming',
 ];
 
 export const DROP_THRESHOLD_PERCENT = 15;
 export const HISTORY_DAYS = 90;
 
-export const MAX_POSTS_PER_RUN = 10;
+// 安全装置 (PA-API / Notion 連打抑制)。CATEGORY_QUOTA 合計 + FIXED_ASINS 想定数を上回る値で運用。
+export const MAX_POSTS_PER_RUN = 30;
 export const MIN_PRICE_YEN = 500;
 export const COOLDOWN_HOURS = 24;
 

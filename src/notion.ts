@@ -71,6 +71,8 @@ export const CATEGORY = {
   PC_DESK: 'pc-desk',
   GAMING: 'gaming',
   AUDIO: 'audio',
+  KITCHEN: 'kitchen',
+  STATIONERY: 'stationery',
   FIXED_LIST: 'fixed-list',
 } as const;
 
