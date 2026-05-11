@@ -20,7 +20,7 @@ ADR-001 (Project Foundation) では Keepa deals + 固定 ASIN を直接 X / Blue
 
 10 時間以内に bon が確認しなかった pending_review は次の cron で **expired** に自動マークし、鮮度落ちの値下がり情報を投稿する事故を防ぐ。
 
-> **注 (2026-05-11)**: 本節の Status 値 (`pending_review` / `expired`) と 10h SLA 自動遷移ロジックは [ADR-003](./003-status-lifecycle-redesign.md) で再設計された。現在の Status enum は `backlog` / `in_progress` / `approved` / `posted` / `rejected` の 5 値、`expireOldDrafts` は廃止済。本節は歴史記録として残置。
+> **注 (2026-05-11)**: 本節の Status 値 (`pending_review` / `expired`) と 10h SLA 自動遷移ロジックは [ADR-003](./003-status-lifecycle-redesign.md) で再設計された。現在の Status enum は `backlog` / `doing` / `approved` / `posted` / `rejected` の 5 値、`expireOldDrafts` は廃止済。本節は歴史記録として残置。
 
 ### 2. ガジェット 3 カテゴリ追加
 

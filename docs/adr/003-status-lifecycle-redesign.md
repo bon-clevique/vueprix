@@ -19,15 +19,15 @@ ADR-002 で導入した Notion 承認フローは `pending_review` → `approved
 ### 1. Status 5 値の再設計
 
 ```
-backlog → in_progress → approved → posted
-                                 ↘
-                                  rejected (sidetrack)
+backlog → doing → approved → posted
+                            ↘
+                             rejected (sidetrack)
 ```
 
 | 値 | 意味 |
 |---|---|
 | `backlog` | bot が cron で作成した直後の候補 (`投稿文` 空) |
-| `in_progress` | bon が採用判断後、Notion AI で `投稿文` を作成中 (作業中の可視化) |
+| `doing` | bon が採用判断後、Notion AI で `投稿文` を作成中 (作業中の可視化) |
 | `approved` | 文面 + レビュー完了。Notion automation が webhook を発火し publish へ |
 | `posted` | publish 完了 (X / Bluesky 投稿成功、`投稿日時` セット済) |
 | `rejected` | 投稿しないと判断したが、**運用ガイドラインとして残す価値がある** ネタ専用。理由のない不採用は Notion ページごと archive/delete (rejected に置かない) |
@@ -43,7 +43,7 @@ backlog → in_progress → approved → posted
 - `EXPIRE_WARN_THRESHOLD` 定数
 - `src/draft.ts` の `expireOldDrafts` 呼び出しと `expired` log field
 
-放置検知は **bon の週次手動レビュー** (`in_progress` フィルタで状況確認) で行う。
+放置検知は **bon の週次手動レビュー** (`doing` フィルタで状況確認) で行う。
 
 ### 3. `queryDuplicateAsins` filter を 4 値に
 
@@ -58,11 +58,15 @@ or: [
 
 `rejected` は意図的に除外。価格が変わって同 ASIN が再度値下がりすれば新規 `backlog` として再候補化されることを許可する (運用意図、コメントに明記)。COOLDOWN_HOURS (24h) も `rejected` には適用されない — 再候補化された新規 backlog を bon が再評価する。
 
-### 4. Status 内部値と表示 label の分離方針
+### 4. Status 内部値は Notion DB の status option name に揃える
 
-コード上の Status 内部値は **snake_case** で統一 (`backlog` / `in_progress` / `approved` / `posted` / `rejected`)。URL encode / log 検索容易性のため。
+コード上の Status 内部値は **Notion DB の status option name と完全一致させる** (`backlog` / `doing` / `approved` / `posted` / `rejected`)。
 
-Notion DB の status option の表示 label は自由 (例: `in_progress` 内部値に対して「in progress」(スペース) ラベルでも可)。
+Notion API は status property の書き込み / クエリで option name の完全一致を要求するため、コード内部値と Notion option label の乖離は許容されない (label の "表示用" 抽象化は実用上できない)。
+
+**運用ルール**: Notion UI で option label を rename した場合、コード側 `STATUS` const と全テスト hardcoded 値を **同期 PR で連動更新する** 必要がある。
+
+> **改訂履歴 (2026-05-11)**: 当初は「内部値を snake_case で統一 (URL encode / log 検索容易性のため)」を採用していたが、初回運用で **コード `'in_progress'` (underscore) と Notion option `'in progress'` (スペース) の不一致が `queryDuplicateAsins` filter 漏れを引き起こす実機障害**が発生。Notion API の完全一致要件が snake_case 統一方針より優先される実態を反映し、本項を撤回。`STATUS.IN_PROGRESS` の value も `'in_progress'` → `'doing'` (Notion option name に追従) に変更した。
 
 ### 5. ADR-002 との関係
 
@@ -87,12 +91,12 @@ ADR-002 §2 (ガジェット 3 カテゴリ追加) と §3 (posted.json 廃止) 
 ## Trade-offs
 
 ### 採用したことで失うもの
-- **自動掃除の利便性**: `pending_review` が放置されても自動 expire しないため、bon が週次レビューを怠ると `backlog` / `in_progress` が無限に積まれる可能性
+- **自動掃除の利便性**: `pending_review` が放置されても自動 expire しないため、bon が週次レビューを怠ると `backlog` / `doing` が無限に積まれる可能性
 - **`expired` という観察可能な状態**: 「SLA 超過で投稿されなかった」という事実は記録されなくなる (運用ガイド価値は薄かったため許容)
 
 ### 採用したことで得るもの
 - **コード単純化**: `expireOldDrafts` + `updateStatusToExpired` + race condition guard で約 90 行が消える
-- **状態の意味的明確化**: `backlog` (放置 OK) / `in_progress` (作業中) / `rejected` (意図的不採用) が分離され、Notion UI 上での運用判断が容易に
+- **状態の意味的明確化**: `backlog` (放置 OK) / `doing` (作業中) / `rejected` (意図的不採用) が分離され、Notion UI 上での運用判断が容易に
 - **`rejected` の guideline 価値向上**: 「価値ある不採用理由」だけが集積し、将来の判定材料 (blocklist 追加 / カテゴリ調整 / Notion AI プロンプト改善等) になる
 - **再候補化の明示**: 同 ASIN が将来再度値下がりした際の挙動が文書化された
 
@@ -100,7 +104,7 @@ ADR-002 §2 (ガジェット 3 カテゴリ追加) と §3 (posted.json 廃止) 
 
 | Risk | Mitigation |
 |---|---|
-| `backlog` / `in_progress` 放置 | 週次レビュー (bon が `in_progress` フィルタで状況確認 → 手動 archive)。`docs/notes/notion-approval-flow.md` Status ライフサイクル節に明記 |
+| `backlog` / `doing` 放置 | 週次レビュー (bon が `doing` フィルタで状況確認 → 手動 archive)。`docs/notes/notion-approval-flow.md` Status ライフサイクル節に明記 |
 | `rejected` の規律が崩れる (理由なし不採用が rejected に混入) | コードで強制不可、運用ポリシーに依存。docs に「理由なしは archive/delete」と明記、定期的に bon が rejected を見返して理由が記載されているか check |
 | 旧 `pending_review` / `expired` row の処分 | bon が手動で Notion DB を一括移行 (本 PR Out of Scope、運用 task)。Notion DB option も MCP 経由で再構成済 (本 PR 内で実施) |
 | Notion DB option label と内部値の不一致 | notion.ts のコメントで内部値を snake_case に統一する旨を明記。Notion 側 option 編集時は内部値を変えず label のみ調整する規律 |
@@ -110,10 +114,10 @@ ADR-002 §2 (ガジェット 3 カテゴリ追加) と §3 (posted.json 廃止) 
 - `src/notion.ts`: `STATUS` enum と関連コードを書き換え、`expireOldDrafts` / `updateStatusToExpired` 関数削除
 - `src/draft.ts`: `expireOldDrafts` 呼び出しと `expired` log field 削除
 - `src/config.ts`: `APPROVAL_SLA_HOURS` / `EXPIRE_WARN_THRESHOLD` 削除
-- テスト: `expireOldDrafts` describe 全削除、Status 値の assertion 更新、`in_progress` の throw テスト追加
+- テスト: `expireOldDrafts` describe 全削除、Status 値の assertion 更新、`doing` の throw テスト追加
 - docs: `notion-approval-flow.md` / `notion-ai-post-generation.md` を新フローに更新
 - ADR-002 header に Superseded 注記 + §1 に本 ADR への参照を追加
-- Notion DB schema: Status option を `backlog` / `in_progress` / `approved` / `posted` / `rejected` に再構成 (MCP 経由で本 PR 内で実施予定 — 旧 option `expired` / `pending_review` / `post candidate` / `blocked` は削除、`backlog` (旧 option) を `backlog` (新内部値) としてリネーム維持)
+- Notion DB schema: Status option を `backlog` / `doing` / `approved` / `posted` / `rejected` に再構成 (MCP の status option 編集は API 未対応のため、bon が Notion UI で手動再構成 — 旧 option `expired` / `pending_review` / `post candidate` / `blocked` は削除、`doing` を新規追加、`backlog` (旧 option) を `backlog` (新内部値) としてリネーム維持)
 
 ## References
 
