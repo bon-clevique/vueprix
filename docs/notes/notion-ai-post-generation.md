@@ -9,13 +9,15 @@
 ```
 GitHub Actions cron (2h)
   ↓ draft 作成 (投稿文 = '')
-Notion DB「vueprix 投稿文」 Status=pending_review
+Notion DB「vueprix 投稿文」 Status=backlog
   ↓ bon が手動でサクラチェッカー確認
-  ↓ Notion AI で 投稿文 を埋める ← 本書の対象
+  ↓ 採用判断 → Status=in_progress (作業中の可視化)
+  ↓ Notion AI で 投稿文 を生成 ← 本書の対象
 Status=approved
   ↓ Notion automation → Cloudflare Worker → GitHub repository_dispatch
 bot-publish.yml が publish.ts を実行
   ↓ payload.postText.trim().length === 0 なら refuse (空ポスト事故防止)
+  ↓ payload.postText が 280 chars 超なら refuse (silent X data loss 防止)
 X / Bluesky に投稿 (Notion property の値をそのまま送信)
 ```
 
@@ -28,11 +30,16 @@ publish.ts のガード 2 種類:
 
 ## 操作手順 (Notion DB ページ上)
 
-1. `Status=pending_review` の row を開く
+1. `Status=backlog` の row を開く
 2. 「サクラチェッカーURL」を開いて検証 (規約上 bot 自動化禁止のため手動)
-3. ボツなら `Status=rejected` に変更して終了 (publish に流れない)
-4. 採用なら `投稿文` 1 つを Notion AI で生成して埋める
-5. 内容を確認 (280 字以内 / 煽り語 NG など) → `Status=approved` に変更 → automation で publish 発火
+3. 採用しない判断:
+   - **ガイドラインとして残す価値あり** (例: マケプレ比率が高い、サクラ度高い等) → Status を `rejected` に変更し、本文に理由を残す
+   - **理由なし不採用** → Notion ページごと archive/delete (rejected に置かない)
+4. 採用なら Status を `in_progress` に変更 (作業中の可視化、他からの「放置」と区別)
+5. `投稿文` property を Notion AI で生成 (下記プロンプト参照)
+6. 内容を確認 (280 字以内 / 煽り語 NG など) → Status を `approved` に変更 → automation で publish 発火
+
+`in_progress` で長期放置されたものは自動 expire しない。週次レビューで `in_progress` フィルタを確認し、bon が手動 archive する。
 
 ## Notion AI プロンプト テンプレート (`投稿文`)
 

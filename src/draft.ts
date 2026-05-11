@@ -16,7 +16,6 @@ import { checkAsin, getDeals } from './keepa.js';
 import { logger } from './logger.js';
 import {
   createDraftPage,
-  expireOldDrafts,
   queryDuplicateAsins,
   type DraftCandidate,
 } from './notion.js';
@@ -132,10 +131,6 @@ export const main = async (): Promise<void> => {
     runId,
   });
 
-  // 古い pending_review を expire してから候補生成 (Notion DB の鮮度保証)。
-  const expired = await expireOldDrafts(startedAt);
-  logger.info('draft', 'expired old drafts', { count: expired });
-
   const [blocklist, activeAsins] = await Promise.all([
     loadBlocklist(),
     queryDuplicateAsins(startedAt),
@@ -210,7 +205,6 @@ export const main = async (): Promise<void> => {
     durationMs: Date.now() - startedAt.getTime(),
     targets: targets.length,
     drafted: draftedCount,
-    expired,
   });
 };
 

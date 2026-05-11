@@ -5,7 +5,6 @@ const getDealsMock = vi.fn();
 const checkAsinMock = vi.fn();
 const getItemsMock = vi.fn();
 const createDraftPageMock = vi.fn();
-const expireOldDraftsMock = vi.fn();
 const queryDuplicateAsinsMock = vi.fn();
 const loadBlocklistMock = vi.fn();
 
@@ -20,7 +19,6 @@ vi.mock('./paapi.js', () => ({
 
 vi.mock('./notion.js', () => ({
   createDraftPage: (...args: unknown[]) => createDraftPageMock(...args),
-  expireOldDrafts: (...args: unknown[]) => expireOldDraftsMock(...args),
   queryDuplicateAsins: (...args: unknown[]) => queryDuplicateAsinsMock(...args),
 }));
 
@@ -35,7 +33,6 @@ const resetAllMocks = () => {
   checkAsinMock.mockReset();
   getItemsMock.mockReset();
   createDraftPageMock.mockReset();
-  expireOldDraftsMock.mockReset();
   queryDuplicateAsinsMock.mockReset();
   loadBlocklistMock.mockReset();
 
@@ -44,7 +41,6 @@ const resetAllMocks = () => {
   checkAsinMock.mockResolvedValue(null);
   getItemsMock.mockResolvedValue([]);
   createDraftPageMock.mockResolvedValue('page-mock-id');
-  expireOldDraftsMock.mockResolvedValue(0);
   queryDuplicateAsinsMock.mockResolvedValue(new Set<string>());
   loadBlocklistMock.mockResolvedValue(new Set<string>());
 };
@@ -275,15 +271,6 @@ describe('draft.main integration', () => {
     expect(createDraftPageMock).not.toHaveBeenCalled();
     // PA-API も呼ばれないはず (targets=0 で early return)
     expect(getItemsMock).not.toHaveBeenCalled();
-  });
-
-  it('expires old drafts before collecting candidates', async () => {
-    expireOldDraftsMock.mockResolvedValue(3);
-
-    const { main } = await import('./draft.js');
-    await main();
-
-    expect(expireOldDraftsMock).toHaveBeenCalledTimes(1);
   });
 
   it('creates draft with empty postText (Notion AI 運用)', async () => {

@@ -1,7 +1,7 @@
 # ADR-002: Notion 承認フロー導入 (サクラ確認) + ガジェットカテゴリ追加
 
 **Date**: 2026-05-10
-**Status**: Accepted
+**Status**: Superseded by [ADR-003](./003-status-lifecycle-redesign.md) (2026-05-11) — Status enum, lifecycle, expire logic は ADR-003 で再設計済。本 ADR の Status / SLA に関する記述は歴史記録
 
 ## Context
 
@@ -19,6 +19,8 @@ ADR-001 (Project Foundation) では Keepa deals + 固定 ASIN を直接 X / Blue
 `vueprix-draft` cron 2h は Notion DB に **Status=pending_review** として候補を書き込むだけにする。bon が Notion 上でサクラチェッカー URL を押して手動確認 → Status を **approved** に変更すると、Notion automation (Plus プラン) が GitHub `repository_dispatch` を発火し、`bot-publish.yml` が該当 page を Notion から取得 → X / Bluesky に投稿 → Status=posted に更新する。
 
 10 時間以内に bon が確認しなかった pending_review は次の cron で **expired** に自動マークし、鮮度落ちの値下がり情報を投稿する事故を防ぐ。
+
+> **注 (2026-05-11)**: 本節の Status 値 (`pending_review` / `expired`) と 10h SLA 自動遷移ロジックは [ADR-003](./003-status-lifecycle-redesign.md) で再設計された。現在の Status enum は `backlog` / `in_progress` / `approved` / `posted` / `rejected` の 5 値、`expireOldDrafts` は廃止済。本節は歴史記録として残置。
 
 ### 2. ガジェット 3 カテゴリ追加
 
