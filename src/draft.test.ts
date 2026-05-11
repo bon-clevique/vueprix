@@ -82,6 +82,69 @@ describe('draft entrypoint', () => {
   });
 });
 
+describe('sortByPriority', () => {
+  const buildCandidate = (overrides: Partial<{
+    asin: string;
+    category: 'food' | 'health' | 'pc-desk' | 'gaming' | 'audio' | 'fixed-list';
+    dropPercent: number;
+  }> = {}) => ({
+    asin: overrides.asin ?? 'B000TEST',
+    title: 'Test',
+    currentPrice: 800,
+    referencePrice: 1000,
+    dropPercent: overrides.dropPercent ?? 20,
+    source: 'deals' as const,
+    category: overrides.category ?? 'food' as const,
+  });
+
+  it('orders fixed-list before food regardless of dropPercent', async () => {
+    const { sortByPriority } = await import('./draft.js');
+    const result = sortByPriority([
+      buildCandidate({ asin: 'FOOD1', category: 'food', dropPercent: 50 }),
+      buildCandidate({ asin: 'FIXED1', category: 'fixed-list', dropPercent: 10 }),
+    ]);
+    expect(result.map((c) => c.asin)).toEqual(['FIXED1', 'FOOD1']);
+  });
+
+  it('orders pc-desk / gaming / audio before health / food', async () => {
+    const { sortByPriority } = await import('./draft.js');
+    const result = sortByPriority([
+      buildCandidate({ asin: 'FOOD', category: 'food' }),
+      buildCandidate({ asin: 'HEALTH', category: 'health' }),
+      buildCandidate({ asin: 'AUDIO', category: 'audio' }),
+      buildCandidate({ asin: 'GAMING', category: 'gaming' }),
+      buildCandidate({ asin: 'PC', category: 'pc-desk' }),
+    ]);
+    expect(result.map((c) => c.asin)).toEqual(['PC', 'GAMING', 'AUDIO', 'HEALTH', 'FOOD']);
+  });
+
+  it('sorts by dropPercent descending within the same category', async () => {
+    const { sortByPriority } = await import('./draft.js');
+    const result = sortByPriority([
+      buildCandidate({ asin: 'A', category: 'pc-desk', dropPercent: 15 }),
+      buildCandidate({ asin: 'B', category: 'pc-desk', dropPercent: 40 }),
+      buildCandidate({ asin: 'C', category: 'pc-desk', dropPercent: 25 }),
+    ]);
+    expect(result.map((c) => c.asin)).toEqual(['B', 'C', 'A']);
+  });
+
+  it('returns an empty array for empty input', async () => {
+    const { sortByPriority } = await import('./draft.js');
+    expect(sortByPriority([])).toEqual([]);
+  });
+
+  it('does not mutate the input array', async () => {
+    const { sortByPriority } = await import('./draft.js');
+    const input = [
+      buildCandidate({ asin: 'FOOD', category: 'food' }),
+      buildCandidate({ asin: 'PC', category: 'pc-desk' }),
+    ];
+    const snapshot = input.map((c) => c.asin);
+    sortByPriority(input);
+    expect(input.map((c) => c.asin)).toEqual(snapshot);
+  });
+});
+
 describe('draft.main integration', () => {
   const originalEnv = { ...process.env };
 
@@ -143,17 +206,15 @@ describe('draft.main integration', () => {
     expect(calledAsins).not.toContain('B000ACTIVE');
   });
 
-  it('limits drafts to MAX_POSTS_PER_RUN (=2)', async () => {
-    // 5 件返して、2 件だけ draft されることを確認
+  it('limits drafts to MAX_POSTS_PER_RUN (=10)', async () => {
+    // 15 件返して、10 件だけ draft されることを確認
     getDealsMock.mockImplementation((categoryId: number) => {
       if (categoryId === 57239051) {
-        return Promise.resolve([
-          buildDeal({ asin: 'B001' }),
-          buildDeal({ asin: 'B002' }),
-          buildDeal({ asin: 'B003' }),
-          buildDeal({ asin: 'B004' }),
-          buildDeal({ asin: 'B005' }),
-        ]);
+        return Promise.resolve(
+          Array.from({ length: 15 }, (_, i) =>
+            buildDeal({ asin: `B${String(i).padStart(3, '0')}` }),
+          ),
+        );
       }
       return Promise.resolve([]);
     });
@@ -161,7 +222,7 @@ describe('draft.main integration', () => {
     const { main } = await import('./draft.js');
     await main();
 
-    expect(createDraftPageMock).toHaveBeenCalledTimes(2);
+    expect(createDraftPageMock).toHaveBeenCalledTimes(10);
   });
 
   it('falls back to Keepa-only when PA-API getItems throws', async () => {

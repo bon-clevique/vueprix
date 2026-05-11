@@ -6,6 +6,7 @@ import { CATEGORY_FIXED, mapKeepaCategoryToNotion, type NotionCategory } from '.
 import { generateReason } from './claude.js';
 import {
   BSKY_MAX_CHARS,
+  CATEGORY_PRIORITY,
   DROP_THRESHOLD_PERCENT,
   FIXED_ASINS,
   KEEPA_CATEGORIES,
@@ -26,7 +27,7 @@ import {
 import { getItems, type ProductInfo } from './paapi.js';
 import { buildPostText, type PostInput } from './posters/index.js';
 
-interface Candidate {
+export interface Candidate {
   asin: string;
   title: string;
   currentPrice: number;
@@ -113,6 +114,20 @@ const dedupe = (candidates: Candidate[]): Candidate[] => {
   return result;
 };
 
+const CATEGORY_RANK: ReadonlyMap<NotionCategory, number> = new Map(
+  CATEGORY_PRIORITY.map((cat, idx) => [cat, idx]),
+);
+
+export const sortByPriority = (candidates: readonly Candidate[]): Candidate[] => {
+  const rank = (c: Candidate): number =>
+    CATEGORY_RANK.get(c.category) ?? CATEGORY_PRIORITY.length;
+  return [...candidates].sort((a, b) => {
+    const r = rank(a) - rank(b);
+    if (r !== 0) return r;
+    return b.dropPercent - a.dropPercent;
+  });
+};
+
 export const main = async (): Promise<void> => {
   const startedAt = new Date();
   const runId = `${startedAt.getTime()}-${randomBytes(2).toString('hex')}`;
@@ -143,7 +158,8 @@ export const main = async (): Promise<void> => {
   const afterBlocklist = merged.filter((c) => !blocklist.has(c.asin));
   // filter.ts の helper に統一 (旧: inline filter で同義実装の重複)。
   const filtered = filterByActiveAsins(afterBlocklist, activeAsins);
-  const targets = filtered.slice(0, MAX_POSTS_PER_RUN);
+  const sorted = sortByPriority(filtered);
+  const targets = sorted.slice(0, MAX_POSTS_PER_RUN);
   logger.info('draft', 'targets selected', {
     afterDedupe: merged.length,
     afterBlocklist: afterBlocklist.length,
