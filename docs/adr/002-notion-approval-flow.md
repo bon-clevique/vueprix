@@ -73,7 +73,7 @@ bon は Notion Plus 加入済 + 鮮度重視のため Webhook を採用。
 | Risk | Mitigation |
 |---|---|
 | 二重投稿 (Notion automation 重複発火 / 手動 webhook テスト) | publish 冒頭で `fetchPageById` が Status≠approved で throw + workflow concurrency group は page_id 単位 |
-| GitHub PAT 漏洩 | fine-grained PAT (vueprix repo + Actions:Write のみ) + 90 日ローテ |
+| GitHub PAT 漏洩 | fine-grained PAT (vueprix repo + Contents:Write / Metadata:Read のみ) + 90 日ローテ |
 | Notion API レート制限 (3req/s) | 1 cron で expire query + dup query + create 20 件 ≈ 25 calls。逐次実行で十分 |
 | 承認 SLA 破綻 (pending 山積) | expired 自動マークで pending を山積させない |
 | Keepa category ID 誤り | `scripts/verify-keepa-categories.ts` で事前検証 (`docs/notes/keepa-categories.md` に記録) |
@@ -85,6 +85,26 @@ bon は Notion Plus 加入済 + 鮮度重視のため Webhook を採用。
 - 新規ファイル: `src/draft.ts`, `src/publish.ts`, `.github/workflows/bot-publish.yml`, `docs/notes/notion-approval-flow.md`
 - 削除: `src/index.ts`, `data/posted.json`, `filter.ts` 内 posted.json 関連 export
 - 既存 `bot.yml` は `vueprix-draft` に rename + `npm run draft` 実行に変更
+
+## End-to-end verification (2026-05-11)
+
+Cloudflare Worker 中間プロキシ (PR-4 / PR-5) 経由の end-to-end が以下の構成で動作確認済:
+
+- **Worker URL**: `https://vueprix-webhook-proxy.badfatcat-git.workers.dev`
+- **GitHub PAT 権限**: `Contents: Read and write` + `Metadata: Read-only` (Actions ではなく Contents、PR-7 で docs 修正)
+- **Worker secrets**: `GITHUB_PAT`, `NOTION_SHARED_SECRET` (256-bit hex)
+- **Notion automation**: Status=approved trigger → POST to Worker URL with `X-Notion-Secret` header + plain text page_id body
+
+動作確認の証跡:
+
+- bot-publish run `25645553252` (2026-05-11 01:27): Worker 経由 dispatch → DryRun=true page で posters skip → Status=posted 更新成功
+- bot-publish run `25645537362` (2026-05-11 01:27): 直接 curl dispatch → pending_review page で early return (Status guard 動作確認)
+
+過去の trial-and-error 記録 (今後の debug 時短のため):
+
+- 当初 `NOTION_VUEPRIX_DATA_SOURCE_ID` GitHub secret が誤値 → 正しい data source UUID `35b3ad52-d5ca-80f3-b57f-000b174abea1` に更新済
+- `createDraftPage` の parent type が `database_id` → `data_source_id` に修正 (PR-6)
+- PAT 権限が `Actions: Write` のみで 403 → `Contents: Write` を追加して解決 (PR-7 docs)
 
 ## References
 
