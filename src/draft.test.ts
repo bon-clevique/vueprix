@@ -45,6 +45,8 @@ const resetAllMocks = () => {
   loadBlocklistMock.mockResolvedValue(new Set<string>());
 };
 
+// title はデフォルトで food whitelist (`国産|日本産|日本製`) を通すようにしている。
+// title 関連を検証する test は明示的に title を override すること。
 const buildDeal = (overrides: Partial<{
   asin: string;
   title: string;
@@ -53,7 +55,7 @@ const buildDeal = (overrides: Partial<{
   dropPercent: number;
 }> = {}) => ({
   asin: 'B000DEAL1',
-  title: 'Sample Deal',
+  title: '国産 サンプル商品',
   currentPrice: 800,
   referencePrice: 1000,
   dropPercent: 20,
@@ -67,10 +69,11 @@ describe('draft entrypoint', () => {
   });
 });
 
-describe('sortByPriority', () => {
+describe('selectByQuota', () => {
+  type Cat = 'food' | 'health' | 'kitchen' | 'stationery' | 'pc-desk' | 'gaming' | 'audio' | 'fixed-list';
   const buildCandidate = (overrides: Partial<{
     asin: string;
-    category: 'food' | 'health' | 'pc-desk' | 'gaming' | 'audio' | 'fixed-list';
+    category: Cat;
     dropPercent: number;
   }> = {}) => ({
     asin: overrides.asin ?? 'B000TEST',
@@ -82,50 +85,74 @@ describe('sortByPriority', () => {
     category: overrides.category ?? 'food' as const,
   });
 
-  it('orders fixed-list before food regardless of dropPercent', async () => {
-    const { sortByPriority } = await import('./draft.js');
-    const result = sortByPriority([
-      buildCandidate({ asin: 'FOOD1', category: 'food', dropPercent: 50 }),
-      buildCandidate({ asin: 'FIXED1', category: 'fixed-list', dropPercent: 10 }),
-    ]);
-    expect(result.map((c) => c.asin)).toEqual(['FIXED1', 'FOOD1']);
+  it('caps each category at its quota', async () => {
+    const { selectByQuota } = await import('./draft.js');
+    // food quota=5: 7 候補のうち 5 件のみ採用される
+    const inputs = Array.from({ length: 7 }, (_, i) =>
+      buildCandidate({ asin: `F${i}`, category: 'food', dropPercent: 50 - i }),
+    );
+    const result = selectByQuota(inputs);
+    expect(result.filter((c) => c.category === 'food')).toHaveLength(5);
   });
 
-  it('orders pc-desk / gaming / audio before health / food', async () => {
-    const { sortByPriority } = await import('./draft.js');
-    const result = sortByPriority([
-      buildCandidate({ asin: 'FOOD', category: 'food' }),
-      buildCandidate({ asin: 'HEALTH', category: 'health' }),
-      buildCandidate({ asin: 'AUDIO', category: 'audio' }),
-      buildCandidate({ asin: 'GAMING', category: 'gaming' }),
-      buildCandidate({ asin: 'PC', category: 'pc-desk' }),
+  it('within a category, picks the top dropPercent', async () => {
+    const { selectByQuota } = await import('./draft.js');
+    // audio quota=2: dropPercent 40, 30 が選ばれ、10 は落ちる
+    const result = selectByQuota([
+      buildCandidate({ asin: 'A1', category: 'audio', dropPercent: 10 }),
+      buildCandidate({ asin: 'A2', category: 'audio', dropPercent: 40 }),
+      buildCandidate({ asin: 'A3', category: 'audio', dropPercent: 30 }),
     ]);
-    expect(result.map((c) => c.asin)).toEqual(['PC', 'GAMING', 'AUDIO', 'HEALTH', 'FOOD']);
+    expect(result.map((c) => c.asin).sort()).toEqual(['A2', 'A3']);
   });
 
-  it('sorts by dropPercent descending within the same category', async () => {
-    const { sortByPriority } = await import('./draft.js');
-    const result = sortByPriority([
-      buildCandidate({ asin: 'A', category: 'pc-desk', dropPercent: 15 }),
-      buildCandidate({ asin: 'B', category: 'pc-desk', dropPercent: 40 }),
-      buildCandidate({ asin: 'C', category: 'pc-desk', dropPercent: 25 }),
-    ]);
-    expect(result.map((c) => c.asin)).toEqual(['B', 'C', 'A']);
+  it('does not redistribute unused quota to other categories', async () => {
+    const { selectByQuota } = await import('./draft.js');
+    // pc-desk 候補が 0 件でも、food が quota(5) を超えて採用されない
+    const inputs = Array.from({ length: 8 }, (_, i) =>
+      buildCandidate({ asin: `F${i}`, category: 'food', dropPercent: 50 - i }),
+    );
+    const result = selectByQuota(inputs);
+    expect(result.filter((c) => c.category === 'food')).toHaveLength(5);
+    expect(result).toHaveLength(5);
   });
 
-  it('returns an empty array for empty input', async () => {
-    const { sortByPriority } = await import('./draft.js');
-    expect(sortByPriority([])).toEqual([]);
+  it('respects custom quota argument', async () => {
+    const { selectByQuota } = await import('./draft.js');
+    const customQuota = {
+      food: 1,
+      health: 1,
+      kitchen: 0,
+      stationery: 0,
+      'pc-desk': 0,
+      audio: 0,
+      gaming: 0,
+      'fixed-list': 0,
+    } as const;
+    const result = selectByQuota(
+      [
+        buildCandidate({ asin: 'F1', category: 'food', dropPercent: 50 }),
+        buildCandidate({ asin: 'F2', category: 'food', dropPercent: 30 }),
+        buildCandidate({ asin: 'H1', category: 'health', dropPercent: 20 }),
+      ],
+      customQuota,
+    );
+    expect(result.map((c) => c.asin).sort()).toEqual(['F1', 'H1']);
+  });
+
+  it('returns empty array for empty input', async () => {
+    const { selectByQuota } = await import('./draft.js');
+    expect(selectByQuota([])).toEqual([]);
   });
 
   it('does not mutate the input array', async () => {
-    const { sortByPriority } = await import('./draft.js');
+    const { selectByQuota } = await import('./draft.js');
     const input = [
-      buildCandidate({ asin: 'FOOD', category: 'food' }),
-      buildCandidate({ asin: 'PC', category: 'pc-desk' }),
+      buildCandidate({ asin: 'A', category: 'food', dropPercent: 30 }),
+      buildCandidate({ asin: 'B', category: 'food', dropPercent: 50 }),
     ];
     const snapshot = input.map((c) => c.asin);
-    sortByPriority(input);
+    selectByQuota(input);
     expect(input.map((c) => c.asin)).toEqual(snapshot);
   });
 });
@@ -151,11 +178,12 @@ describe('draft.main integration', () => {
 
   it('drops candidates whose ASIN is in the blocklist', async () => {
     // 食品カテゴリで 2 件 deal 返す。1 件は blocklist にある。
+    // title は food whitelist を通すよう「国産」を含める。
     getDealsMock.mockImplementation((categoryId: number) => {
       if (categoryId === 57239051) {
         return Promise.resolve([
-          buildDeal({ asin: 'B000BLOCK', title: 'Blocked Item' }),
-          buildDeal({ asin: 'B000PASS', title: 'Allowed Item' }),
+          buildDeal({ asin: 'B000BLOCK', title: '国産 ブロック対象' }),
+          buildDeal({ asin: 'B000PASS', title: '国産 通過対象' }),
         ]);
       }
       return Promise.resolve([]);
@@ -175,8 +203,8 @@ describe('draft.main integration', () => {
     getDealsMock.mockImplementation((categoryId: number) => {
       if (categoryId === 57239051) {
         return Promise.resolve([
-          buildDeal({ asin: 'B000ACTIVE', title: 'Active in Notion' }),
-          buildDeal({ asin: 'B000NEW', title: 'New' }),
+          buildDeal({ asin: 'B000ACTIVE', title: '国産 重複対象' }),
+          buildDeal({ asin: 'B000NEW', title: '国産 新規対象' }),
         ]);
       }
       return Promise.resolve([]);
@@ -191,8 +219,8 @@ describe('draft.main integration', () => {
     expect(calledAsins).not.toContain('B000ACTIVE');
   });
 
-  it('limits drafts to MAX_POSTS_PER_RUN (=10)', async () => {
-    // 15 件返して、10 件だけ draft されることを確認
+  it('limits food drafts to its CATEGORY_QUOTA (=5) regardless of how many deals returned', async () => {
+    // food カテゴリで 15 件返しても CATEGORY_QUOTA.food (=5) を超えない
     getDealsMock.mockImplementation((categoryId: number) => {
       if (categoryId === 57239051) {
         return Promise.resolve(
@@ -207,13 +235,13 @@ describe('draft.main integration', () => {
     const { main } = await import('./draft.js');
     await main();
 
-    expect(createDraftPageMock).toHaveBeenCalledTimes(10);
+    expect(createDraftPageMock).toHaveBeenCalledTimes(5);
   });
 
   it('falls back to Keepa-only when PA-API getItems throws', async () => {
     getDealsMock.mockImplementation((categoryId: number) => {
       if (categoryId === 57239051) {
-        return Promise.resolve([buildDeal({ asin: 'B000FALL', title: 'Fallback Title' })]);
+        return Promise.resolve([buildDeal({ asin: 'B000FALL', title: '国産 フォールバック商品' })]);
       }
       return Promise.resolve([]);
     });
@@ -227,13 +255,13 @@ describe('draft.main integration', () => {
     const draftArg = createDraftPageMock.mock.calls[0]?.[0] as { asin: string; title: string };
     expect(draftArg.asin).toBe('B000FALL');
     // PA-API fallback 時は Keepa の title を使う
-    expect(draftArg.title).toBe('Fallback Title');
+    expect(draftArg.title).toBe('国産 フォールバック商品');
   });
 
   it('uses PA-API product info when available (preferred over Keepa fallback)', async () => {
     getDealsMock.mockImplementation((categoryId: number) => {
       if (categoryId === 57239051) {
-        return Promise.resolve([buildDeal({ asin: 'B000PA', title: 'Keepa Title' })]);
+        return Promise.resolve([buildDeal({ asin: 'B000PA', title: '国産 Keepa Title' })]);
       }
       return Promise.resolve([]);
     });
@@ -273,10 +301,67 @@ describe('draft.main integration', () => {
     expect(getItemsMock).not.toHaveBeenCalled();
   });
 
+  it('drops candidates whose title does not match category whitelist', async () => {
+    // food category whitelist は (国産|日本産|日本製) を要求するため、これに該当しない
+    // title はフィルタで落ちる。
+    getDealsMock.mockImplementation((categoryId: number) => {
+      if (categoryId === 57239051) {
+        return Promise.resolve([
+          buildDeal({ asin: 'B000NOWL', title: '輸入トマト缶 400g x 24' }),
+          buildDeal({ asin: 'B000PASS', title: '国産レモン果汁 500ml' }),
+        ]);
+      }
+      return Promise.resolve([]);
+    });
+
+    const { main } = await import('./draft.js');
+    await main();
+
+    const calledAsins = createDraftPageMock.mock.calls.map((c) => (c[0] as { asin: string }).asin);
+    expect(calledAsins).toContain('B000PASS');
+    expect(calledAsins).not.toContain('B000NOWL');
+  });
+
+  it('includes fixed candidates outside the per-category quota cap', async () => {
+    // food quota=5 を埋めた上で、fixed (FIXED_ASINS) からも 1 件追加されることを確認。
+    // fixed 候補は CATEGORY_QUOTA の対象外で別経路。
+    getDealsMock.mockImplementation((categoryId: number) => {
+      if (categoryId === 57239051) {
+        return Promise.resolve(
+          Array.from({ length: 8 }, (_, i) =>
+            buildDeal({ asin: `B${String(i).padStart(3, '0')}`, title: '国産 食品' }),
+          ),
+        );
+      }
+      return Promise.resolve([]);
+    });
+    // checkAsin (FIXED_ASINS の各 ASIN について) — 1 件だけ history を返す
+    checkAsinMock.mockImplementation((asin: string) => {
+      if (asin === 'B0C1JGD2T6') {
+        return Promise.resolve({
+          asin,
+          title: 'カリタ コーヒーフィルター',
+          currentPrice: 800,
+          minPrice90d: 1000,
+          dropPercent: 20,
+        });
+      }
+      return Promise.resolve(null);
+    });
+
+    const { main } = await import('./draft.js');
+    await main();
+
+    // food=5 + fixed=1 で 6 件になる (food quota 5 を超えても fixed は別枠)
+    expect(createDraftPageMock).toHaveBeenCalledTimes(6);
+    const calledAsins = createDraftPageMock.mock.calls.map((c) => (c[0] as { asin: string }).asin);
+    expect(calledAsins).toContain('B0C1JGD2T6');
+  });
+
   it('creates draft with empty postText (Notion AI 運用)', async () => {
     getDealsMock.mockImplementation((categoryId: number) => {
       if (categoryId === 57239051) {
-        return Promise.resolve([buildDeal({ asin: 'B000EMPTY', title: 'Empty Test' })]);
+        return Promise.resolve([buildDeal({ asin: 'B000EMPTY', title: '国産 空文 Test' })]);
       }
       return Promise.resolve([]);
     });
