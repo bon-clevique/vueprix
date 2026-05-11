@@ -11,7 +11,7 @@ import { logger } from './logger.js';
 
 // Notion DB「vueprix 投稿文」schema (Phase 1 で 2026-05-09 / 2026-05-10 / 2026-05-11 に拡張済):
 //   - 名前 (title): 商品名
-//   - 理由 (rich_text): Claude 生成 reason
+//   - 理由 (rich_text): 投稿文の「なぜ買うか」一文 (Notion AI で生成)
 //   - ASIN (rich_text)
 //   - 投稿文_X (rich_text)
 //   - 投稿文_Bluesky (rich_text)
@@ -30,7 +30,6 @@ import { logger } from './logger.js';
 // 環境変数:
 //   - NOTION_API_KEY: integration の internal token
 //   - NOTION_VUEPRIX_DATA_SOURCE_ID: 投稿文 DB の data source id
-//   - NOTION_VUEPRIX_GUIDELINES_DATA_SOURCE_ID: トーンガイドライン DB の data source id (任意)
 
 // 1 rich_text/title element 上限は Notion 側 2000 chars。安全マージンで 1900 にする。
 const NOTION_TEXT_LIMIT = 1900;
@@ -82,11 +81,6 @@ const CATEGORY_VALUES: ReadonlySet<string> = new Set(Object.values(CATEGORY));
 const isStatus = (s: string): s is Status => STATUS_VALUES.has(s);
 const isNotionCategory = (c: string): c is NotionCategory => CATEGORY_VALUES.has(c);
 
-export interface Guideline {
-  text: string;
-  tags: string[];
-}
-
 export interface DraftCandidate {
   asin: string;
   title: string;
@@ -129,100 +123,13 @@ const buildClient = (): Client =>
     notionVersion: '2026-03-11',
   });
 
-const isGuidelinesConfigured = (): boolean =>
-  Boolean(process.env.NOTION_API_KEY) && Boolean(process.env.NOTION_VUEPRIX_GUIDELINES_DATA_SOURCE_ID);
-
 interface NotionRichText {
   plain_text?: string;
-}
-
-interface NotionMultiSelectOption {
-  name?: string;
 }
 
 interface NotionSelectOption {
   name?: string;
 }
-
-interface NotionGuidelinePropsTitle {
-  type: 'title';
-  title?: NotionRichText[];
-}
-
-interface NotionGuidelinePropsCheckbox {
-  type: 'checkbox';
-  checkbox?: boolean;
-}
-
-interface NotionGuidelinePropsMultiSelect {
-  type: 'multi_select';
-  multi_select?: NotionMultiSelectOption[];
-}
-
-type NotionGuidelineProperty =
-  | NotionGuidelinePropsTitle
-  | NotionGuidelinePropsCheckbox
-  | NotionGuidelinePropsMultiSelect
-  | { type: string };
-
-interface NotionGuidelinePage {
-  properties: Record<string, NotionGuidelineProperty>;
-}
-
-const extractTitle = (page: NotionGuidelinePage): string => {
-  const titleProp = Object.values(page.properties).find((p) => p.type === 'title') as NotionGuidelinePropsTitle | undefined;
-  if (!titleProp || !titleProp.title) return '';
-  return titleProp.title.map((t) => t.plain_text ?? '').join('').trim();
-};
-
-const extractTags = (page: NotionGuidelinePage): string[] => {
-  const tagsProp = page.properties.Tags as NotionGuidelinePropsMultiSelect | undefined;
-  if (!tagsProp || tagsProp.type !== 'multi_select' || !tagsProp.multi_select) return [];
-  return tagsProp.multi_select
-    .map((t) => t.name ?? '')
-    .filter((name): name is string => name.length > 0);
-};
-
-export const fetchActiveGuidelines = async (): Promise<Guideline[]> => {
-  if (!isGuidelinesConfigured()) {
-    logger.info('notion', 'guidelines DB not configured, skipping');
-    return [];
-  }
-  const dataSourceId = process.env.NOTION_VUEPRIX_GUIDELINES_DATA_SOURCE_ID as string;
-  try {
-    const client = buildClient();
-    const res = await client.dataSources.query({
-      data_source_id: dataSourceId,
-      filter: {
-        property: 'Active',
-        checkbox: { equals: true },
-      },
-      page_size: 100,
-    });
-    const guidelines: Guideline[] = (res.results as unknown as NotionGuidelinePage[])
-      .map((page) => ({
-        text: extractTitle(page),
-        tags: extractTags(page),
-      }))
-      .filter((g) => g.text.length > 0);
-    logger.info('notion', 'guidelines fetched', { count: guidelines.length });
-    if (guidelines.length > 20) {
-      logger.warn('notion', 'large guidelines count may inflate Claude prompt tokens', {
-        count: guidelines.length,
-      });
-    }
-    return guidelines;
-  } catch (err) {
-    const status = (err as { status?: number }).status;
-    const code = (err as { code?: string }).code;
-    logger.error('notion', 'guidelines fetch failed (continuing with empty list)', {
-      status: status ?? null,
-      code: code ?? null,
-      type: err instanceof Error ? err.constructor.name : typeof err,
-    });
-    return [];
-  }
-};
 
 // Status=pending_review として candidate を 1 page 作成。page id を返す。
 // approval workflow の起点。Notion automation が Status=approved に変更すると repository_dispatch が発火する。

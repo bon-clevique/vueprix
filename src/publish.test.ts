@@ -156,6 +156,23 @@ describe('publish entrypoint', () => {
     expect(appendHistoryMock).not.toHaveBeenCalled();
   });
 
+  it('returns early when 理由 is empty (Notion AI 運用: 文言未生成のまま approved に遷移した場合)', async () => {
+    // ドラフト作成時に 理由 / 投稿文_X / 投稿文_Bluesky は '' で入る。Notion AI で文言を
+    // 埋めずに approved にすると buildPostText が空 reason で壊れた投稿を生成する。
+    // publish 側 guard で early return することを確認。Status は approved のまま残し再投稿を許す。
+    pagesRetrieveMock.mockResolvedValueOnce(
+      buildApprovedPage({
+        '理由': { rich_text: [{ plain_text: '   ' }] }, // whitespace only
+      }),
+    );
+    const { main } = await import('./publish.js');
+    await main(['node', 'publish.ts', '--page-id', '0123456789abcdef0123456789abcdef']);
+    expect(xPostMock).not.toHaveBeenCalled();
+    expect(blueskyPostMock).not.toHaveBeenCalled();
+    expect(pagesUpdateMock).not.toHaveBeenCalled();
+    expect(appendHistoryMock).not.toHaveBeenCalled();
+  });
+
   it('throws when --page-id is missing', async () => {
     const { main } = await import('./publish.js');
     await expect(main(['node', 'publish.ts'])).rejects.toThrow(/--page-id/);

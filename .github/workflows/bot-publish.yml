@@ -7,7 +7,6 @@ name: vueprix-publish
 # Required secrets (same set as bot.yml plus X/Bluesky):
 #   KEEPA_API_KEY (unused at runtime, kept for parity if publish needs it later)
 #   PAAPI_ACCESS_KEY, PAAPI_SECRET_KEY, PAAPI_PARTNER_TAG
-#   ANTHROPIC_API_KEY (unused at runtime; reason 文は Notion から読む)
 #   X_API_KEY, X_API_SECRET, X_ACCESS_TOKEN, X_ACCESS_TOKEN_SECRET
 #   BSKY_IDENTIFIER, BSKY_PASSWORD
 #   NOTION_API_KEY, NOTION_VUEPRIX_DATA_SOURCE_ID
@@ -59,7 +58,6 @@ jobs:
           PAAPI_PARTNER_TAG: ${{ secrets.PAAPI_PARTNER_TAG }}
           PAAPI_HOST: webservices.amazon.co.jp
           PAAPI_REGION: us-west-2
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           X_API_KEY: ${{ secrets.X_API_KEY }}
           X_API_SECRET: ${{ secrets.X_API_SECRET }}
           X_ACCESS_TOKEN: ${{ secrets.X_ACCESS_TOKEN }}

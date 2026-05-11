@@ -3,12 +3,12 @@ name: vueprix-draft
 # Required GitHub Actions secrets:
 #   KEEPA_API_KEY
 #   PAAPI_ACCESS_KEY, PAAPI_SECRET_KEY, PAAPI_PARTNER_TAG
-#   ANTHROPIC_API_KEY
 #   NOTION_API_KEY, NOTION_VUEPRIX_DATA_SOURCE_ID
-#   NOTION_VUEPRIX_GUIDELINES_DATA_SOURCE_ID (optional)
 #
 # X / Bluesky 投稿は bot-publish.yml (repository_dispatch) 側で実行する。
 # 本 workflow は Notion DB に Status=pending_review の候補を書き込むだけ。
+# 投稿文 (理由 / 投稿文_X / 投稿文_Bluesky) は空文字列で作成され、
+# Notion AI で人が文言を埋めてから Status=approved に遷移させる運用。
 
 on:
   schedule:
@@ -44,10 +44,8 @@ jobs:
           PAAPI_PARTNER_TAG: ${{ secrets.PAAPI_PARTNER_TAG }}
           PAAPI_HOST: webservices.amazon.co.jp
           PAAPI_REGION: us-west-2
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           NOTION_API_KEY: ${{ secrets.NOTION_API_KEY }}
           NOTION_VUEPRIX_DATA_SOURCE_ID: ${{ secrets.NOTION_VUEPRIX_DATA_SOURCE_ID }}
-          NOTION_VUEPRIX_GUIDELINES_DATA_SOURCE_ID: ${{ secrets.NOTION_VUEPRIX_GUIDELINES_DATA_SOURCE_ID }}
           LOG_LEVEL: info
         run: npm run draft
 

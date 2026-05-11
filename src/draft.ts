@@ -3,16 +3,13 @@ import { randomBytes } from 'node:crypto';
 import { buildAffiliateUrl, requirePartnerTag } from './affiliate.js';
 import { loadBlocklist } from './blocklist.js';
 import { CATEGORY_FIXED, mapKeepaCategoryToNotion, type NotionCategory } from './category.js';
-import { generateReason } from './claude.js';
 import {
-  BSKY_MAX_CHARS,
   CATEGORY_PRIORITY,
   DROP_THRESHOLD_PERCENT,
   FIXED_ASINS,
   KEEPA_CATEGORIES,
   MAX_POSTS_PER_RUN,
   MIN_PRICE_YEN,
-  X_MAX_CHARS,
 } from './config.js';
 import { calcDropPercent, filterByActiveAsins, isGoodDeal } from './filter.js';
 import { checkAsin, getDeals } from './keepa.js';
@@ -20,12 +17,10 @@ import { logger } from './logger.js';
 import {
   createDraftPage,
   expireOldDrafts,
-  fetchActiveGuidelines,
   queryDuplicateAsins,
   type DraftCandidate,
 } from './notion.js';
 import { getItems, type ProductInfo } from './paapi.js';
-import { buildPostText, type PostInput } from './posters/index.js';
 
 export interface Candidate {
   asin: string;
@@ -141,9 +136,8 @@ export const main = async (): Promise<void> => {
   const expired = await expireOldDrafts(startedAt);
   logger.info('draft', 'expired old drafts', { count: expired });
 
-  const [blocklist, guidelines, activeAsins] = await Promise.all([
+  const [blocklist, activeAsins] = await Promise.all([
     loadBlocklist(),
-    fetchActiveGuidelines(),
     queryDuplicateAsins(startedAt),
   ]);
 
@@ -165,7 +159,6 @@ export const main = async (): Promise<void> => {
     afterBlocklist: afterBlocklist.length,
     afterActive: filtered.length,
     willDraft: targets.length,
-    guidelines: guidelines.length,
   });
 
   if (targets.length === 0) {
@@ -188,21 +181,14 @@ export const main = async (): Promise<void> => {
 
   for (const target of targets) {
     const product = paapiByAsin.get(target.asin) ?? buildKeepaProduct(target, partnerTag);
-    const reason = await generateReason(product, target.dropPercent, guidelines);
-    const input: PostInput = {
-      product,
-      reason,
-      referencePrice: target.referencePrice,
-      dropPercent: target.dropPercent,
-    };
-    const postTextX = buildPostText(input, X_MAX_CHARS);
-    const postTextBluesky = buildPostText(input, BSKY_MAX_CHARS);
+    // reason / postTextX / postTextBluesky は Notion AI で生成する運用に移行したため、
+    // ドラフト作成時は空文字列で初期化する。Notion 上で人が文言を埋めてから approved に遷移させる。
     const draft: DraftCandidate = {
       asin: target.asin,
       title: product.title,
-      postTextX,
-      postTextBluesky,
-      reason,
+      postTextX: '',
+      postTextBluesky: '',
+      reason: '',
       amazonUrl: buildAffiliateUrl(target.asin, partnerTag),
       currentPrice: product.currentPrice,
       referencePrice: target.referencePrice,
