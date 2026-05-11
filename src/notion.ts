@@ -7,7 +7,7 @@ import { logger } from './logger.js';
 //   - 名前 (title): 商品名
 //   - 投稿文 (rich_text): X / Bluesky 両用本文 (Notion AI で生成、≤280 chars 制約は運用側で守る)
 //   - ASIN (rich_text)
-//   - Status (status: backlog/in_progress/approved/posted/rejected) — PR-8 で select → status type に変更
+//   - Status (status: backlog/doing/approved/posted/rejected) — PR-8 で select → status type に変更
 //   - 候補生成日時 (date)
 //   - 投稿日時 (date)
 //   - サクラチェッカーURL (url)
@@ -44,20 +44,21 @@ const requireConfigured = (): string => {
 const buildSakuraCheckerUrl = (asin: string): string =>
   `https://sakura-checker.jp/search/${encodeURIComponent(asin)}/`;
 
-// Status は内部値を snake_case で統一 (URL encode / log 検索容易性のため)。
-// Notion DB の status option の表示 label は自由 (例: in_progress を「in progress」と表示しても可)、
-// ただし API 経由で書き込む / 読み出す内部値は本 const の値と一致させる。
+// Status は Notion DB の status option name に揃える。
+// Notion API は status property の書き込み / クエリで option name の完全一致を要求するため、
+// Notion UI 側で option label を変更したら本 const と全 test hardcoded 値も連動更新が必要。
+// (旧方針「内部値は snake_case で統一」は ADR-003 改訂で撤回 — option label を真値とする方針に変更)
 //
 // 遷移:
 //   backlog (bot 作成直後、投稿文 空)
-//     → in_progress (bon が Notion AI で 投稿文 を作成中、手動遷移)
+//     → doing (bon が Notion AI で 投稿文 を作成中、手動遷移)
 //     → approved (文面 + レビュー完了、Notion automation で publish 発火)
 //     → posted (publish 完了)
 //   rejected (投稿しないと判断 + ガイドラインとして残す価値あり、sidetrack)
 //   理由なし不採用は Notion ページごと archive/delete (rejected に置かない)
 export const STATUS = {
   BACKLOG: 'backlog',
-  IN_PROGRESS: 'in_progress',
+  IN_PROGRESS: 'doing',
   APPROVED: 'approved',
   POSTED: 'posted',
   REJECTED: 'rejected',
@@ -155,7 +156,7 @@ export const createDraftPage = async (draft: DraftCandidate): Promise<string> =>
       'サクラチェッカーURL': { url: buildSakuraCheckerUrl(draft.asin) },
       '候補生成日時': { date: { start: draft.generatedAt.toISOString() } },
       // Status は Notion 側で「status」type (PR-8 で select から変更)。書き込み形式も `status: { name }`。
-      // 初期値は backlog (bon が後で in_progress に手動遷移 → 投稿文 を Notion AI で生成 → approved)。
+      // 初期値は backlog (bon が後で doing に手動遷移 → 投稿文 を Notion AI で生成 → approved)。
       Status: { status: { name: STATUS.BACKLOG } },
       ...(relations.length > 0 ? { '関連ガイドライン': { relation: relations } } : {}),
     },
@@ -271,7 +272,7 @@ interface NotionQueryResult {
   next_cursor?: string | null;
 }
 
-// Status ∈ {backlog, in_progress, approved, posted} かつ 候補生成日時 > now-COOLDOWN_HOURS の ASIN を Set 集約。
+// Status ∈ {backlog, doing, approved, posted} かつ 候補生成日時 > now-COOLDOWN_HOURS の ASIN を Set 集約。
 // 重複下書き作成を防ぐ。posted から COOLDOWN_HOURS 以内なら同 ASIN は再投稿しない。
 // rejected は意図的に除外: 「ガイドラインとして残した不採用 ASIN」が将来再度値下がりした際に
 // 新規 backlog として再候補化されることを許可する (運用意図、COOLDOWN_HOURS も適用しない —

@@ -236,10 +236,10 @@ describe('fetchPageById', () => {
     await expect(fetchPageById('page-1')).rejects.toThrow(/backlog/);
   });
 
-  it('throws when Status is in_progress (Notion AI 作業中)', async () => {
-    pagesRetrieveMock.mockResolvedValueOnce(buildPage('in_progress'));
+  it('throws when Status is doing (Notion AI 作業中)', async () => {
+    pagesRetrieveMock.mockResolvedValueOnce(buildPage('doing'));
     const { fetchPageById } = await import('./notion.js');
-    await expect(fetchPageById('page-1')).rejects.toThrow(/in_progress/);
+    await expect(fetchPageById('page-1')).rejects.toThrow(/doing/);
   });
 
   it('throws when Status=posted (二重投稿防止 hook)', async () => {
@@ -275,7 +275,7 @@ describe('queryDuplicateAsins', () => {
     expect(dataSourcesQueryMock).not.toHaveBeenCalled();
   });
 
-  it('queries with Status filter (backlog/in_progress/approved/posted) and returns asin set', async () => {
+  it('queries with Status filter (backlog/doing/approved/posted) and returns asin set', async () => {
     dataSourcesQueryMock.mockResolvedValueOnce({
       results: [
         { id: 'p1', properties: { ASIN: { rich_text: [{ plain_text: 'B001' }] } } },
@@ -293,7 +293,7 @@ describe('queryDuplicateAsins', () => {
     // 4 値で重複防止 (rejected は意図的に除外 → 再候補化を許可)
     expect(filter.and[0]?.or).toEqual([
       { property: 'Status', status: { equals: 'backlog' } },
-      { property: 'Status', status: { equals: 'in_progress' } },
+      { property: 'Status', status: { equals: 'doing' } },
       { property: 'Status', status: { equals: 'approved' } },
       { property: 'Status', status: { equals: 'posted' } },
     ]);

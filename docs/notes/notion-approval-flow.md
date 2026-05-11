@@ -1,20 +1,20 @@
 # Notion 承認フロー運用手順
 
-vueprix は Amazon 値下がり候補を **Notion DB「vueprix 投稿文」に Status=backlog として書き込み → bon が手動でサクラチェッカーを確認 → 採用なら Status を in_progress に変更 → Notion AI で `投稿文` を生成 → Status を approved に変更 → Notion automation の Webhook が GitHub `repository_dispatch` を発火 → `bot-publish.yml` workflow が X / Bluesky に投稿** という 4-stage pipeline で運用する。
+vueprix は Amazon 値下がり候補を **Notion DB「vueprix 投稿文」に Status=backlog として書き込み → bon が手動でサクラチェッカーを確認 → 採用なら Status を doing に変更 → Notion AI で `投稿文` を生成 → Status を approved に変更 → Notion automation の Webhook が GitHub `repository_dispatch` を発火 → `bot-publish.yml` workflow が X / Bluesky に投稿** という 4-stage pipeline で運用する。
 
 サクラチェッカーの自動呼び出しは規約・robots.txt 違反のため恒久的に対象外 (`docs/adr/002-notion-approval-flow.md` 参照)。
 
 ## Status ライフサイクル
 
 - **`backlog`**: bot が cron で作成した直後の候補 (`投稿文` 空)
-- **`in_progress`**: bon が採用判断後、Notion AI で `投稿文` を作成中の状態 (作業中であることの可視化)
+- **`doing`**: bon が採用判断後、Notion AI で `投稿文` を作成中の状態 (作業中であることの可視化)
 - **`approved`**: 文面 + レビュー完了。Notion automation が webhook を発火し publish へ
 - **`posted`**: publish 完了 (X / Bluesky 投稿成功、`投稿日時` セット済)
 - **`rejected`**: 投稿しないと判断したが、**運用ガイドラインとして残す価値がある** ネタ。理由のない不採用は Notion ページごと archive/delete (rejected に置かない)
 
-`in_progress` で長期放置されたものは自動 expire しない。週次レビューで `in_progress` フィルタを確認し、放置を発見したら bon が手動 archive する。
+`doing` で長期放置されたものは自動 expire しない。週次レビューで `doing` フィルタを確認し、放置を発見したら bon が手動 archive する。
 
-重複防止 (`queryDuplicateAsins`) は 24h 以内かつ Status ∈ {backlog, in_progress, approved, posted} を対象。**`rejected` は意図的に除外**: 価格が変わって同 ASIN が再度値下がりすれば backlog として再候補化を許可する。
+重複防止 (`queryDuplicateAsins`) は 24h 以内かつ Status ∈ {backlog, doing, approved, posted} を対象。**`rejected` は意図的に除外**: 価格が変わって同 ASIN が再度値下がりすれば backlog として再候補化を許可する。
 
 ## DB スキーマ
 
@@ -25,7 +25,7 @@ DB: 「vueprix 投稿文」(`collection://35b3ad52-d5ca-80f3-b57f-000b174abea1`)
 | 名前 | title | 商品名 (Notion 必須プロパティ) |
 | 投稿文 | rich_text | X / Bluesky 両用本文 (Notion AI で生成、draft 時は空文字列で作成、X 上限 280 chars 制約) |
 | ASIN | rich_text | Amazon ASIN (10 文字) |
-| Status | status | `backlog` / `in_progress` / `approved` / `posted` / `rejected` (PR-8 で select → status type、Status 再設計で expired/pending_review 廃止) |
+| Status | status | `backlog` / `doing` / `approved` / `posted` / `rejected` (PR-8 で select → status type、Status 再設計で expired/pending_review 廃止) |
 | 候補生成日時 | date | draft 作成タイムスタンプ |
 | 投稿日時 | date | publish 完了タイムスタンプ |
 | サクラチェッカーURL | url | `https://sakura-checker.jp/search/<ASIN>/` |
