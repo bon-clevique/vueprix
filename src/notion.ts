@@ -236,7 +236,9 @@ export const createDraftPage = async (draft: DraftCandidate): Promise<string> =>
   const body = `${bodyPrefix}X:\n${draft.postTextX}\n\nBluesky:\n${draft.postTextBluesky}`;
   const relations = (draft.guidelineRelations ?? []).map((id) => ({ id }));
   const res = await client.pages.create({
-    parent: { type: 'database_id', database_id: dataSourceId },
+    // Notion API v2026-03-11 では parent は data_source_id を指定する。
+    // (環境変数名は NOTION_VUEPRIX_DATA_SOURCE_ID で、値は data source UUID)
+    parent: { type: 'data_source_id', data_source_id: dataSourceId },
     properties: {
       '名前': {
         title: [{ type: 'text', text: { content: truncate(draft.title, 200) } }],
