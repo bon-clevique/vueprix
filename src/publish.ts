@@ -85,16 +85,6 @@ export const main = async (argv: readonly string[]): Promise<void> => {
     dropPercent: payload.dropPercent,
   };
 
-  // DryRun=true の page は実投稿せず Status=posted に更新するだけ (テスト用の動作)。
-  if (payload.dryRun) {
-    logger.info('publish', 'dryRun page, skipping posters and marking posted', {
-      pageId: args.pageId,
-      asin: payload.asin,
-    });
-    await updateStatusToPosted(args.pageId, new Date());
-    return;
-  }
-
   const result = await dispatch(posters, input);
   const succeeded = anySucceeded(result);
   const historyEntry = {
@@ -108,7 +98,6 @@ export const main = async (argv: readonly string[]): Promise<void> => {
     source: 'publish' as const,
     category: payload.category,
     reason: payload.reason,
-    dryRun: false,
     posters: result,
   };
   await appendHistory(historyEntry);

@@ -20,5 +20,3 @@ export const buildPostText = (input: PostInput, max: number): string => {
   const text = `【値下がり】${title}${fixedReason}${tail}`;
   return text.length > max ? truncate(text, max) : text;
 };
-
-export const isDryRun = (): boolean => (process.env.DRY_RUN ?? 'true').toLowerCase() !== 'false';

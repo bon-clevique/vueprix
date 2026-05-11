@@ -71,9 +71,11 @@ GitHub PAT 設定など Notion 側の構成手順は [docs/notes/notion-approval
 cp .env.example .env
 # .env に各種 API キーを記入
 
-# DRY_RUN モード (実投稿せず Notion DB に DryRun=true で 1 件下書き作成、bot-publish も DryRun=true 時は posters skip)
-DRY_RUN=true npm run draft
+# draft 実行 (Notion DB に Status=pending_review を書き込む。実投稿は bon が approved にした後 bot-publish 経由でのみ走る)
+npm run draft
 ```
+
+> `DRY_RUN` 環境変数 / `DryRun` checkbox property は PR-8 で廃止。Status guard (`fetchPageById` の approved check + 投稿日時セット済 page の early return) のみで二重投稿を防ぐ本番一本化に変更した。承認済みの page のみが publish 対象になるため、本番接続前の試運転は Notion DB を直接見て pending_review row が作成されることで確認する。
 
 ## 設計ドキュメント
 

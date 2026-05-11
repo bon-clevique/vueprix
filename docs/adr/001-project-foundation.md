@@ -15,8 +15,8 @@ Amazon アソシエイトの収益源と PA-API 利用条件 (定期購買発生
 **Scope boundary** (in):
 - Keepa deals × 2 カテゴリ + 固定 ASIN × 8 件の値下がり監視
 - Claude API による購買理由 1 文生成
-- X / Bluesky への自動投稿 (DRY_RUN 切替可能)
-- `data/posted.json` による 24h cooldown 重複除去
+- X / Bluesky への自動投稿 (※ `DRY_RUN` 環境変数による切替は ADR-002 / PR-8 で廃止済、本番 1 本化)
+- `data/posted.json` による 24h cooldown 重複除去 (※ ADR-002 で Notion DB クエリに置換済)
 
 **Scope boundary** (out):
 - 通知先 SNS の追加 (Mastodon / Threads 等)

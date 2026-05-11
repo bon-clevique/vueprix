@@ -14,11 +14,6 @@ on:
   schedule:
     - cron: '0 */2 * * *'   # every 2 hours
   workflow_dispatch:
-    inputs:
-      dry_run:
-        description: 'Run without creating real drafts (true/false)'
-        required: false
-        default: 'true'
 
 permissions:
   contents: read   # post-history.jsonl は artifact upload するので write 権限は不要
@@ -53,7 +48,6 @@ jobs:
           NOTION_API_KEY: ${{ secrets.NOTION_API_KEY }}
           NOTION_VUEPRIX_DATA_SOURCE_ID: ${{ secrets.NOTION_VUEPRIX_DATA_SOURCE_ID }}
           NOTION_VUEPRIX_GUIDELINES_DATA_SOURCE_ID: ${{ secrets.NOTION_VUEPRIX_GUIDELINES_DATA_SOURCE_ID }}
-          DRY_RUN: ${{ github.event.inputs.dry_run || 'true' }}
           LOG_LEVEL: info
         run: npm run draft
 

@@ -9,7 +9,7 @@
 ## Testing
 
 - [ ] Unit tests added/updated
-- [ ] Manual testing completed (DRY_RUN=true で `npm start` 確認)
+- [ ] Manual testing completed (Notion DB に pending_review row が作成されることを確認、or 該当 unit test 追加)
 
 ## Checklist
 

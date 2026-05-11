@@ -113,17 +113,13 @@ const dedupe = (candidates: Candidate[]): Candidate[] => {
   return result;
 };
 
-const isDryRunFlag = (): boolean => (process.env.DRY_RUN ?? 'true').toLowerCase() !== 'false';
-
 export const main = async (): Promise<void> => {
   const startedAt = new Date();
   const runId = `${startedAt.getTime()}-${randomBytes(2).toString('hex')}`;
   const partnerTag = requirePartnerTag();
-  const dryRun = isDryRunFlag();
   logger.info('draft', 'run started', {
     startedAt: startedAt.toISOString(),
     runId,
-    dryRun,
   });
 
   // 古い pending_review を expire してから候補生成 (Notion DB の鮮度保証)。
@@ -196,7 +192,6 @@ export const main = async (): Promise<void> => {
       referencePrice: target.referencePrice,
       dropPercent: target.dropPercent,
       category: target.category,
-      dryRun,
       generatedAt: new Date(),
     };
     try {

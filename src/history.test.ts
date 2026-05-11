@@ -15,7 +15,6 @@ const sampleEntry = (overrides: Partial<PostHistoryEntry> = {}): PostHistoryEntr
   source: 'fixed',
   category: 'fixed-list',
   reason: 'test reason',
-  dryRun: true,
   posters: { x: true, bluesky: true },
   ...overrides,
 });
