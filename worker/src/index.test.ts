@@ -4,6 +4,31 @@ import handler, { type Env, timingSafeEqual } from './index.js';
 const VALID_PAGE_ID = '12345678-90ab-cdef-1234-567890abcdef';
 const VALID_PAGE_ID_NODASH = '1234567890abcdef1234567890abcdef';
 
+/**
+ * Notion automation の実 webhook payload を模した envelope JSON。
+ * 2026-05-10 に wrangler tail で実機確認した形を最小限に保持。
+ */
+function buildNotionEnvelope(pageId: string): string {
+  return JSON.stringify({
+    source: {
+      type: 'automation',
+      automation_id: 'aut-1',
+      action_id: 'act-1',
+      event_id: 'evt-1',
+      user_id: 'usr-1',
+      attempt: 1,
+    },
+    data: {
+      object: 'page',
+      id: pageId,
+      created_time: '2026-05-10T00:00:00.000Z',
+      last_edited_time: '2026-05-10T00:00:00.000Z',
+      created_by: { object: 'user', id: 'usr-1' },
+      last_edited_by: { object: 'user', id: 'usr-1' },
+    },
+  });
+}
+
 function buildEnv(overrides: Partial<Env> = {}): Env {
   return {
     GITHUB_PAT: 'fake-pat',
@@ -23,7 +48,7 @@ function buildReq(
   } = {},
 ): Request {
   // Notion automation は Content-Type Header を設定できないため、Worker は
-  // Header 不在で plain text body を受信する前提。test もそれを模す。
+  // Header 不在で body を受信する前提。test もそれを模す。
   const headers = new Headers();
   if (init.secret !== null && init.secret !== undefined) {
     headers.set('X-Notion-Secret', init.secret);
@@ -127,8 +152,8 @@ describe('webhook proxy fetch handler', () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it('rejects legacy JSON body (regex match fails) with 400', async () => {
-    // 旧フォーマット (`{"page_id":"..."}`) は plain text として regex に一致しないため拒否される。
+  it('rejects legacy JSON body `{"page_id": "..."}` with 400 (data.id 不在)', async () => {
+    // 旧フォーマット (`{"page_id":"..."}`) は data.id を持たないため拒否される。
     const res = await handler.fetch(
       buildReq({
         secret: 'shared-secret-xyz',
@@ -178,7 +203,7 @@ describe('webhook proxy fetch handler', () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it('accepts dashed UUID, fires repository_dispatch, returns 202', async () => {
+  it('accepts dashed UUID via plain text body, fires repository_dispatch, returns 202', async () => {
     fetchMock.mockResolvedValueOnce(new Response(null, { status: 204 }));
 
     const res = await handler.fetch(
@@ -206,7 +231,7 @@ describe('webhook proxy fetch handler', () => {
     });
   });
 
-  it('accepts dash-less UUID and forwards it verbatim', async () => {
+  it('accepts dash-less UUID via plain text body and forwards it verbatim', async () => {
     fetchMock.mockResolvedValueOnce(new Response(null, { status: 204 }));
 
     const res = await handler.fetch(
@@ -264,6 +289,141 @@ describe('webhook proxy fetch handler', () => {
       event_type: 'vueprix-publish',
       client_payload: { page_id: VALID_PAGE_ID },
     });
+  });
+
+  // ---- Notion automation envelope JSON body ----
+
+  it('accepts Notion envelope JSON with dashed data.id, fires repository_dispatch, returns 202', async () => {
+    fetchMock.mockResolvedValueOnce(new Response(null, { status: 204 }));
+
+    const res = await handler.fetch(
+      buildReq({
+        secret: 'shared-secret-xyz',
+        body: buildNotionEnvelope(VALID_PAGE_ID),
+      }),
+      buildEnv(),
+    );
+
+    expect(res.status).toBe(202);
+    expect(await res.json()).toEqual({ ok: true, page_id: VALID_PAGE_ID });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    const reqInit = fetchMock.mock.calls[0]![1] as RequestInit;
+    expect(JSON.parse(reqInit.body as string)).toEqual({
+      event_type: 'vueprix-publish',
+      client_payload: { page_id: VALID_PAGE_ID },
+    });
+  });
+
+  it('accepts Notion envelope JSON with undashed data.id', async () => {
+    fetchMock.mockResolvedValueOnce(new Response(null, { status: 204 }));
+
+    const res = await handler.fetch(
+      buildReq({
+        secret: 'shared-secret-xyz',
+        body: buildNotionEnvelope(VALID_PAGE_ID_NODASH),
+      }),
+      buildEnv(),
+    );
+
+    expect(res.status).toBe(202);
+    const reqInit = fetchMock.mock.calls[0]![1] as RequestInit;
+    expect(JSON.parse(reqInit.body as string)).toEqual({
+      event_type: 'vueprix-publish',
+      client_payload: { page_id: VALID_PAGE_ID_NODASH },
+    });
+  });
+
+  it('rejects Notion envelope with missing data field with 400', async () => {
+    const res = await handler.fetch(
+      buildReq({
+        secret: 'shared-secret-xyz',
+        body: JSON.stringify({ source: { type: 'automation' } }),
+      }),
+      buildEnv(),
+    );
+    expect(res.status).toBe(400);
+    expect(await res.text()).toBe('Invalid page_id');
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('rejects Notion envelope with missing data.id field with 400', async () => {
+    const res = await handler.fetch(
+      buildReq({
+        secret: 'shared-secret-xyz',
+        body: JSON.stringify({
+          source: { type: 'automation' },
+          data: { object: 'page' },
+        }),
+      }),
+      buildEnv(),
+    );
+    expect(res.status).toBe(400);
+    expect(await res.text()).toBe('Invalid page_id');
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('rejects Notion envelope with non-UUID data.id string with 400', async () => {
+    const res = await handler.fetch(
+      buildReq({
+        secret: 'shared-secret-xyz',
+        body: JSON.stringify({
+          source: { type: 'automation' },
+          data: { object: 'page', id: 'not-a-uuid' },
+        }),
+      }),
+      buildEnv(),
+    );
+    expect(res.status).toBe(400);
+    expect(await res.text()).toBe('Invalid page_id');
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('rejects envelope with empty string data.id', async () => {
+    const res = await handler.fetch(
+      buildReq({
+        secret: 'shared-secret-xyz',
+        body: JSON.stringify({
+          source: {
+            type: 'automation',
+            automation_id: 'aut-1',
+            action_id: 'act-1',
+            event_id: 'evt-1',
+            user_id: 'usr-1',
+            attempt: 1,
+          },
+          data: { object: 'page', id: '' },
+        }),
+      }),
+      buildEnv(),
+    );
+    expect(res.status).toBe(400);
+    expect(await res.text()).toBe('Invalid page_id');
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('rejects empty JSON object `{}` with 400', async () => {
+    const res = await handler.fetch(
+      buildReq({ secret: 'shared-secret-xyz', body: '{}' }),
+      buildEnv(),
+    );
+    expect(res.status).toBe(400);
+    expect(await res.text()).toBe('Invalid page_id');
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('rejects malformed JSON starting with `{` (parse error → fallback also fails) with 400', async () => {
+    // 先頭 `{` で JSON parse を試みるが malformed → fallback で plain text 全体を UUID 評価 → 不一致 400
+    const res = await handler.fetch(
+      buildReq({
+        secret: 'shared-secret-xyz',
+        body: '{not-json',
+      }),
+      buildEnv(),
+    );
+    expect(res.status).toBe(400);
+    expect(await res.text()).toBe('Invalid page_id');
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it('returns 502 when GitHub responds non-2xx', async () => {

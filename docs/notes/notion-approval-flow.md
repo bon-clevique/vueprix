@@ -36,25 +36,44 @@ Notion Plus 加入が前提。DB のオートメーションメニューから:
    ```
    https://vueprix-webhook-proxy.<subdomain>.workers.dev
    ```
-4. **Headers** (`Content-Type` は **設定しない** — Notion automation の custom header UI は `Content-Type` を予約済で受け付けない制約があるため、Worker 側を `Content-Type` 不要な plain text 受信に合わせている):
+4. **Headers** (`Content-Type` は **設定しない** — Notion automation の custom header UI は `Content-Type` を予約済で受け付けない制約があるため。Body が JSON の場合は Notion 本体が `application/json` を自動付与する):
    ```
    X-Notion-Secret: <NOTION_SHARED_SECRET>
    ```
-5. **Body** (plain text — JSON ではない):
-   ```
-   {{Page ID}}
-   ```
+5. **Body**: 空欄でよい。
 
-`{{Page ID}}` は Notion automation が自動展開する row の UUID 変数 (dashed / undashed どちらでも Worker は受理する)。Body 全体がこの値 1 行のみで、JSON 包装は不要。`event_type` は Worker が `DISPATCH_EVENT_TYPE` env var から再宣言するため Notion 側で渡す必要は無い。
+Notion automation の Webhook アクションは body 欄が空でも以下の envelope JSON を自動送信する (2026-05-10 wrangler tail 実機確認):
 
-formula property を経由したい場合は式を `id()` (または `format(id())`) に簡略化し、その property の値を Body に挿入する形式でも同等に動作する。
+```json
+{
+  "source": {
+    "type": "automation",
+    "automation_id": "...",
+    "action_id": "...",
+    "event_id": "...",
+    "user_id": "...",
+    "attempt": 1
+  },
+  "data": {
+    "object": "page",
+    "id": "<対象 row の UUID>",
+    "created_time": "...",
+    "last_edited_time": "...",
+    "created_by": { ... },
+    "last_edited_by": { ... }
+  }
+}
+```
+
+Worker は `data.id` を target page UUID として抽出する。`event_type` は Worker が `DISPATCH_EVENT_TYPE` env var から再宣言するため Notion 側で渡す必要は無い。
 
 ### Worker の受信仕様
 
-- Worker は `req.text()` で plain text として読み出し → `trim()` → end-anchored UUID regex で全文 match を厳格チェックする
-- `Content-Type` Header は不要 (Notion 側の制約に合わせた設計)
+- Worker は `req.text()` で body を読み出し、先頭が `{` なら Notion automation envelope の `data.id` を `JSON.parse` で抽出する
+- JSON parse 失敗 / `data.id` 不在 / `data.id` が string でないケースでは plain text 全体を `trim()` して fallback (curl smoke test で UUID 単体を投げる経路の後方互換性維持)
+- 抽出した値を end-anchored UUID regex で全文 match (dashed 8-4-4-4-12 / undashed 32 hex、mixed-dash は reject)
 - 前後 whitespace / 末尾改行は trim で吸収するため安全
-- 旧形式の JSON body (`{"page_id":"..."}`) は regex match に失敗するため `400 Bad Request` で reject される (silent ignore ではない)
+- 旧形式の JSON body (`{"page_id":"..."}`) は `data.id` を持たないため regex 評価前に弾かれ `400 Bad Request` で reject される (silent ignore ではない)
 
 ## Cloudflare Worker 中間プロキシ (`worker/`)
 
@@ -70,9 +89,9 @@ Notion → GitHub を直結する代わりに Cloudflare Worker (`vueprix-webhoo
 |---|---|
 | メソッド | `POST` のみ (それ以外 405) |
 | 認証 | `X-Notion-Secret` header と Worker secret の constant-time 比較 |
-| 入力 | plain text body = Notion page UUID 単体 (dashed / undashed 両対応、前後 whitespace は trim) |
+| 入力 | (1) Notion automation envelope JSON body の `data.id` (本番経路) / (2) plain text body = UUID 単体 (curl smoke test の後方互換、dashed / undashed 両対応、前後 whitespace は trim) |
 | 成功 | `202` を返却し、GitHub `repository_dispatch` を `event_type=vueprix-publish` で発火 |
-| 失敗 | 401 (auth) / 400 (validation, 空 body / 非 UUID / 旧 JSON body) / 502 (GitHub API non-2xx) |
+| 失敗 | 401 (auth) / 400 (validation, 空 body / 非 UUID / envelope に `data.id` 不在 / 旧 `{"page_id":"..."}` JSON) / 502 (GitHub API non-2xx) |
 
 詳細・deploy 手順 → `worker/README.md`
 

@@ -42,11 +42,35 @@ const handler = {
       return new Response('Unauthorized', { status: 401 });
     }
 
-    // 3. Body 受信 (plain text の page_id 文字列単体)
-    //    Notion automation の Content-Type Header 設定不可制約に対応するため、JSON parse を行わず
-    //    text として受信して trim 後に UUID validation で全文 match を厳格チェックする。
-    //    Cloudflare Workers の req.text() は空 body でも空文字列を返し例外を投げないため try/catch は不要。
-    const pageId = (await req.text()).trim();
+    // 3. Body 受信
+    //    Notion automation は実体 webhook payload を以下の envelope JSON 形式で送る
+    //    (2026-05-10 wrangler tail で実機確認):
+    //      { "source": { "type": "automation", ... },
+    //        "data":   { "object": "page", "id": "<uuid>", ... } }
+    //    そのため body が JSON っぽい (先頭 `{`) なら parse して data.id を抽出。
+    //    parse 失敗 / data.id が無い場合は plain text 全体を fallback で評価する
+    //    (curl smoke test 等で UUID 単体を送る後方互換性のため)。
+    //    Cloudflare Workers の req.text() は空 body でも空文字列を返し例外を投げない。
+    const rawBody = await req.text();
+    let pageId = '';
+
+    if (rawBody.trim().startsWith('{')) {
+      try {
+        const parsed = JSON.parse(rawBody) as { data?: { id?: unknown } };
+        const id = parsed?.data?.id;
+        if (typeof id === 'string' && id.trim() !== '') {
+          pageId = id.trim();
+        }
+      } catch {
+        // JSON parse 失敗 → plain text fallback で評価
+      }
+    }
+
+    if (!pageId) {
+      // plain text body fallback (curl smoke test 等で UUID 単体送信のケース)
+      pageId = rawBody.trim();
+    }
+
     if (!NOTION_PAGE_ID_RE.test(pageId)) {
       return new Response('Invalid page_id', { status: 400 });
     }
