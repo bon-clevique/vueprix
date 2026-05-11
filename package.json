@@ -22,7 +22,6 @@
   "author": "bon",
   "license": "SEE LICENSE IN LICENSE",
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.94.0",
     "@atproto/api": "^0.19.13",
     "@aws-sdk/hash-node": "^3.370.0",
     "@aws-sdk/signature-v4": "^3.370.0",

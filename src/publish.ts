@@ -77,6 +77,20 @@ export const main = async (argv: readonly string[]): Promise<void> => {
     return;
   }
 
+  // Notion AI 運用 (Claude API 廃止後) では、ドラフト作成時に「理由」property が空文字列で
+  // 入る。人が Notion 上で文言を埋めずに approved に遷移させると、buildPostText が空 reason
+  // で構造的に壊れた投稿 (「通常 ¥X → ¥Y」と「→ Amazon で見る」の間に空白行が残る) を
+  // 生成して X/Bluesky に流れる事故が起きる。空 reason の段階では publish を refuse する。
+  // 再実行可能性のため Status は approved のまま残す (人が「理由」を埋めて Notion automation
+  // を再発火させれば再投稿される)。
+  if (payload.reason.trim().length === 0) {
+    logger.warn('publish', 'reason is empty, refusing to post to avoid malformed output', {
+      pageId: args.pageId,
+      asin: payload.asin,
+    });
+    return;
+  }
+
   const product = buildProductFromPayload(payload);
   const input: PostInput = {
     product,

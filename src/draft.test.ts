@@ -4,11 +4,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 const getDealsMock = vi.fn();
 const checkAsinMock = vi.fn();
 const getItemsMock = vi.fn();
-const generateReasonMock = vi.fn();
 const createDraftPageMock = vi.fn();
 const expireOldDraftsMock = vi.fn();
 const queryDuplicateAsinsMock = vi.fn();
-const fetchActiveGuidelinesMock = vi.fn();
 const loadBlocklistMock = vi.fn();
 
 vi.mock('./keepa.js', () => ({
@@ -20,14 +18,9 @@ vi.mock('./paapi.js', () => ({
   getItems: (...args: unknown[]) => getItemsMock(...args),
 }));
 
-vi.mock('./claude.js', () => ({
-  generateReason: (...args: unknown[]) => generateReasonMock(...args),
-}));
-
 vi.mock('./notion.js', () => ({
   createDraftPage: (...args: unknown[]) => createDraftPageMock(...args),
   expireOldDrafts: (...args: unknown[]) => expireOldDraftsMock(...args),
-  fetchActiveGuidelines: (...args: unknown[]) => fetchActiveGuidelinesMock(...args),
   queryDuplicateAsins: (...args: unknown[]) => queryDuplicateAsinsMock(...args),
 }));
 
@@ -41,22 +34,18 @@ const resetAllMocks = () => {
   getDealsMock.mockReset();
   checkAsinMock.mockReset();
   getItemsMock.mockReset();
-  generateReasonMock.mockReset();
   createDraftPageMock.mockReset();
   expireOldDraftsMock.mockReset();
   queryDuplicateAsinsMock.mockReset();
-  fetchActiveGuidelinesMock.mockReset();
   loadBlocklistMock.mockReset();
 
   // sane defaults
   getDealsMock.mockResolvedValue([]);
   checkAsinMock.mockResolvedValue(null);
   getItemsMock.mockResolvedValue([]);
-  generateReasonMock.mockResolvedValue('test reason');
   createDraftPageMock.mockResolvedValue('page-mock-id');
   expireOldDraftsMock.mockResolvedValue(0);
   queryDuplicateAsinsMock.mockResolvedValue(new Set<string>());
-  fetchActiveGuidelinesMock.mockResolvedValue([]);
   loadBlocklistMock.mockResolvedValue(new Set<string>());
 };
 
@@ -295,5 +284,27 @@ describe('draft.main integration', () => {
     await main();
 
     expect(expireOldDraftsMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('creates draft with empty reason / postTextX / postTextBluesky (Notion AI 運用)', async () => {
+    getDealsMock.mockImplementation((categoryId: number) => {
+      if (categoryId === 57239051) {
+        return Promise.resolve([buildDeal({ asin: 'B000EMPTY', title: 'Empty Test' })]);
+      }
+      return Promise.resolve([]);
+    });
+
+    const { main } = await import('./draft.js');
+    await main();
+
+    expect(createDraftPageMock).toHaveBeenCalledTimes(1);
+    const draftArg = createDraftPageMock.mock.calls[0]?.[0] as {
+      reason: string;
+      postTextX: string;
+      postTextBluesky: string;
+    };
+    expect(draftArg.reason).toBe('');
+    expect(draftArg.postTextX).toBe('');
+    expect(draftArg.postTextBluesky).toBe('');
   });
 });

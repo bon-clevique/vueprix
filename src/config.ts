@@ -51,9 +51,6 @@ export const BSKY_MAX_CHARS = 300;
 
 export const POST_HISTORY_PATH = "data/post-history.jsonl";
 
-export const CLAUDE_MODEL = "claude-sonnet-4-20250514";
-export const CLAUDE_MAX_TOKENS = 100;
-
 // pending_review → expired SLA。bon の手動承認猶予 (時間)。
 export const APPROVAL_SLA_HOURS = 10;
 
