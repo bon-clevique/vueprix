@@ -3,6 +3,11 @@ import type { NotionCategory } from './category.js';
 import { COOLDOWN_HOURS, MAX_QUERY_PAGES } from './config.js';
 import { logger } from './logger.js';
 
+export interface PostedLinks {
+  x?: string;
+  bluesky?: string;
+}
+
 // Notion DB「vueprix 投稿文」schema:
 //   - 名前 (title): 商品名
 //   - 投稿文 (rich_text): X / Bluesky 両用本文 (Notion AI で生成、≤280 chars 制約は運用側で守る)
@@ -168,7 +173,16 @@ export const createDraftPage = async (draft: DraftCandidate): Promise<string> =>
   return pageId;
 };
 
-export const updateStatusToPosted = async (pageId: string, postedAt: Date): Promise<void> => {
+// links は X / Bluesky の投稿 URL。set されている poster のみ bookmark ブロックとして
+// page 末尾に append する (replace ではない — 再投稿による重複は二重投稿ガードで
+// 起きない前提なので、冪等性は持たせない)。
+// Notion API の制約: page 直下に children を追加する場合は blocks.children.append を使う。
+// pages.update で children を渡しても無視される。
+export const updateStatusToPosted = async (
+  pageId: string,
+  postedAt: Date,
+  links: PostedLinks = {},
+): Promise<void> => {
   const client = buildClient();
   await client.pages.update({
     page_id: pageId,
@@ -177,7 +191,18 @@ export const updateStatusToPosted = async (pageId: string, postedAt: Date): Prom
       '投稿日時': { date: { start: postedAt.toISOString() } },
     },
   });
-  logger.info('notion', 'status updated to posted', { pageId });
+
+  const bookmarks: Array<{ object: 'block'; type: 'bookmark'; bookmark: { url: string } }> = [];
+  if (links.x) bookmarks.push({ object: 'block', type: 'bookmark', bookmark: { url: links.x } });
+  if (links.bluesky) bookmarks.push({ object: 'block', type: 'bookmark', bookmark: { url: links.bluesky } });
+  if (bookmarks.length > 0) {
+    await client.blocks.children.append({ block_id: pageId, children: bookmarks });
+  }
+
+  logger.info('notion', 'status updated to posted', {
+    pageId,
+    bookmarks: bookmarks.length,
+  });
 };
 
 interface NotionPageRich {

@@ -94,6 +94,12 @@ export const main = async (argv: readonly string[]): Promise<void> => {
   const input: PostInput = { asin: payload.asin, text: payload.postText };
   const result = await dispatch(posters, input);
   const succeeded = anySucceeded(result);
+  // post-history.jsonl の schema は `Record<string, boolean>` のまま維持 (URL を持つ新形式は
+  // 過去 entry と互換性が崩れるため)。URL は Notion bookmark 化のみに使い、log/history には
+  // 入れない。
+  const postersBool = Object.fromEntries(
+    Object.entries(result).map(([k, v]) => [k, v.ok]),
+  );
   const historyEntry = {
     timestamp: new Date().toISOString(),
     runId,
@@ -104,12 +110,16 @@ export const main = async (argv: readonly string[]): Promise<void> => {
     dropPercent: payload.dropPercent,
     source: 'publish' as const,
     category: payload.category,
-    posters: result,
+    posters: postersBool,
   };
   await appendHistory(historyEntry);
 
   if (succeeded) {
-    await updateStatusToPosted(args.pageId, new Date());
+    const links = {
+      x: result.x?.url,
+      bluesky: result.bluesky?.url,
+    };
+    await updateStatusToPosted(args.pageId, new Date(), links);
     logger.info('publish', 'run finished', {
       durationMs: Date.now() - startedAt.getTime(),
       asin: payload.asin,
