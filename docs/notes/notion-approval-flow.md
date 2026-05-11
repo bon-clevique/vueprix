@@ -11,11 +11,9 @@ DB: 「vueprix 投稿文」(`collection://35b3ad52-d5ca-80f3-b57f-000b174abea1`)
 | プロパティ | Type | 説明 |
 |---|---|---|
 | 名前 | title | 商品名 (Notion 必須プロパティ) |
-| 理由 | rich_text | 生活シーン文 (PR #28 以降は Notion AI で生成、draft 時は空文字列で作成) |
+| 投稿文 | rich_text | X / Bluesky 両用本文 (Notion AI で生成、draft 時は空文字列で作成、X 上限 280 chars 制約) |
 | ASIN | rich_text | Amazon ASIN (10 文字) |
-| 投稿文_X | rich_text | X 用本文 ≤280 chars (PR #28 以降は Notion AI で生成、draft 時は空文字列で作成) |
-| 投稿文_Bluesky | rich_text | Bluesky 用本文 ≤300 chars (PR #28 以降は Notion AI で生成、draft 時は空文字列で作成) |
-| Status | status | `pending_review` / `approved` / `rejected` / `posted` / `expired` / `blocked` (PR-8 で select → status type に変更) |
+| Status | status | `pending_review` / `approved` / `rejected` / `posted` / `expired` (PR-8 で select → status type に変更) |
 | 候補生成日時 | date | draft 作成タイムスタンプ |
 | 投稿日時 | date | publish 完了タイムスタンプ |
 | サクラチェッカーURL | url | `https://sakura-checker.jp/search/<ASIN>/` |

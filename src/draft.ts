@@ -181,14 +181,12 @@ export const main = async (): Promise<void> => {
 
   for (const target of targets) {
     const product = paapiByAsin.get(target.asin) ?? buildKeepaProduct(target, partnerTag);
-    // reason / postTextX / postTextBluesky は Notion AI で生成する運用に移行したため、
-    // ドラフト作成時は空文字列で初期化する。Notion 上で人が文言を埋めてから approved に遷移させる。
+    // postText は Notion AI で生成する運用に移行したため、ドラフト作成時は空文字列で初期化する。
+    // Notion 上で人が文言を埋めてから approved に遷移させる。空のまま approved にすると publish が refuse する。
     const draft: DraftCandidate = {
       asin: target.asin,
       title: product.title,
-      postTextX: '',
-      postTextBluesky: '',
-      reason: '',
+      postText: '',
       amazonUrl: buildAffiliateUrl(target.asin, partnerTag),
       currentPrice: product.currentPrice,
       referencePrice: target.referencePrice,

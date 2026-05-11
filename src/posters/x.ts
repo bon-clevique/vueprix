@@ -1,7 +1,5 @@
 import { TwitterApi } from 'twitter-api-v2';
-import { X_MAX_CHARS } from '../config.js';
 import { logger } from '../logger.js';
-import { buildPostText } from './format.js';
 import type { Poster, PostInput } from './types.js';
 
 const redactedTweetError = (err: unknown): Error => {
@@ -11,7 +9,6 @@ const redactedTweetError = (err: unknown): Error => {
 };
 
 const send = async (input: PostInput): Promise<void> => {
-  const text = buildPostText(input, X_MAX_CHARS);
   const apiKey = process.env.X_API_KEY;
   const apiSecret = process.env.X_API_SECRET;
   const accessToken = process.env.X_ACCESS_TOKEN;
@@ -21,8 +18,8 @@ const send = async (input: PostInput): Promise<void> => {
   }
   const client = new TwitterApi({ appKey: apiKey, appSecret: apiSecret, accessToken, accessSecret });
   try {
-    const res = await client.v2.tweet(text);
-    logger.info('poster.x', 'X tweet posted', { asin: input.product.asin, tweetId: res.data.id });
+    const res = await client.v2.tweet(input.text);
+    logger.info('poster.x', 'X tweet posted', { asin: input.asin, tweetId: res.data.id });
   } catch (err) {
     throw redactedTweetError(err);
   }
@@ -30,6 +27,5 @@ const send = async (input: PostInput): Promise<void> => {
 
 export const xPoster: Poster = {
   name: 'x',
-  maxChars: X_MAX_CHARS,
   post: send,
 };

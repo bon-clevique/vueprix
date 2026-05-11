@@ -14,7 +14,7 @@ export const dispatch = async (posters: Poster[], input: PostInput): Promise<Pos
       result[p.name] = false;
       const reason = r && r.status === 'rejected' ? r.reason : new Error('unknown failure');
       logger.error('poster.dispatcher', `${p.name} post failed`, {
-        asin: input.product.asin,
+        asin: input.asin,
         error: reason instanceof Error ? reason.message : String(reason),
       });
     }

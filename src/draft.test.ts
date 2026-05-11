@@ -286,7 +286,7 @@ describe('draft.main integration', () => {
     expect(expireOldDraftsMock).toHaveBeenCalledTimes(1);
   });
 
-  it('creates draft with empty reason / postTextX / postTextBluesky (Notion AI 運用)', async () => {
+  it('creates draft with empty postText (Notion AI 運用)', async () => {
     getDealsMock.mockImplementation((categoryId: number) => {
       if (categoryId === 57239051) {
         return Promise.resolve([buildDeal({ asin: 'B000EMPTY', title: 'Empty Test' })]);
@@ -298,13 +298,7 @@ describe('draft.main integration', () => {
     await main();
 
     expect(createDraftPageMock).toHaveBeenCalledTimes(1);
-    const draftArg = createDraftPageMock.mock.calls[0]?.[0] as {
-      reason: string;
-      postTextX: string;
-      postTextBluesky: string;
-    };
-    expect(draftArg.reason).toBe('');
-    expect(draftArg.postTextX).toBe('');
-    expect(draftArg.postTextBluesky).toBe('');
+    const draftArg = createDraftPageMock.mock.calls[0]?.[0] as { postText: string };
+    expect(draftArg.postText).toBe('');
   });
 });
