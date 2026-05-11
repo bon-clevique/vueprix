@@ -123,6 +123,7 @@ describe('webhook proxy fetch handler', () => {
       buildEnv(),
     );
     expect(res.status).toBe(400);
+    expect(await res.text()).toBe('Invalid page_id');
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
@@ -136,6 +137,7 @@ describe('webhook proxy fetch handler', () => {
       buildEnv(),
     );
     expect(res.status).toBe(400);
+    expect(await res.text()).toBe('Invalid page_id');
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
@@ -148,6 +150,31 @@ describe('webhook proxy fetch handler', () => {
       buildEnv(),
     );
     expect(res.status).toBe(400);
+    expect(await res.text()).toBe('Invalid page_id');
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('rejects POST with no body (undefined) with 400', async () => {
+    const res = await handler.fetch(
+      buildReq({ secret: 'shared-secret-xyz' }), // body 省略
+      buildEnv(),
+    );
+    expect(res.status).toBe(400);
+    expect(await res.text()).toBe('Invalid page_id');
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('rejects mixed-dash UUID (partial dashes) with 400', async () => {
+    // dash が一部だけ抜けた UUID は厳格化により拒否
+    const res = await handler.fetch(
+      buildReq({
+        secret: 'shared-secret-xyz',
+        body: '1234567890ab-cdef-1234-567890abcdef', // 先頭 dash なし、残り dash あり
+      }),
+      buildEnv(),
+    );
+    expect(res.status).toBe(400);
+    expect(await res.text()).toBe('Invalid page_id');
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
