@@ -151,7 +151,11 @@ describe('createDraftPage', () => {
     });
     expect(id).toBe('page-abc');
     expect(pagesCreateMock).toHaveBeenCalledTimes(1);
-    const arg = pagesCreateMock.mock.calls[0]?.[0] as { properties: Record<string, unknown> };
+    const arg = pagesCreateMock.mock.calls[0]?.[0] as {
+      parent: unknown;
+      properties: Record<string, unknown>;
+    };
+    expect(arg.parent).toEqual({ type: 'data_source_id', data_source_id: 'ds-uuid-123' });
     expect(arg.properties.Status).toEqual({ select: { name: 'pending_review' } });
     expect(arg.properties.ASIN).toEqual({ rich_text: [{ type: 'text', text: { content: 'B0FKLMMS2G' } }] });
     expect(arg.properties['投稿文_X']).toEqual({ rich_text: [{ type: 'text', text: { content: 'X text' } }] });
