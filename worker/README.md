@@ -21,18 +21,22 @@ Notion no longer leaks the PAT.
 ```
 POST https://vueprix-webhook-proxy.<subdomain>.workers.dev/
 Headers:
-  Content-Type: application/json
   X-Notion-Secret: <NOTION_SHARED_SECRET>
-Body:
-  { "page_id": "<notion-uuid>" }
+Body (plain text — UUID 文字列単体, dashed / undashed 両対応):
+  35c3ad52d5ca81b0acc1ee7a3808ae87
 ```
+
+`Content-Type` header is **not required** (Notion automation cannot set
+custom `Content-Type`, so the Worker reads the body as plain text via
+`req.text()` and trims surrounding whitespace before validating the
+UUID with an end-anchored regex).
 
 Responses:
 
 | Status | Meaning |
 |---|---|
 | `202 Accepted` | `repository_dispatch` was fired successfully |
-| `400 Bad Request` | malformed JSON / missing or invalid `page_id` |
+| `400 Bad Request` | empty body / non-UUID body (legacy JSON body also lands here) |
 | `401 Unauthorized` | missing or wrong `X-Notion-Secret` |
 | `405 Method Not Allowed` | non-POST |
 | `502 Bad Gateway` | GitHub API responded non-2xx |
@@ -68,12 +72,13 @@ After the first `wrangler deploy` succeeds, copy the printed URL into
 update the Notion automation:
 
 1. **URL**: the Worker URL above
-2. **Headers**: `X-Notion-Secret: <same value used in wrangler secret put>`
-3. **Body**: unchanged (`{ "event_type": "vueprix-publish", "client_payload": { "page_id": "{{Page ID}}" } }`)
+2. **Headers**: `X-Notion-Secret: <same value used in wrangler secret put>` **only** (do **not** add `Content-Type`)
+3. **Body**: plain text — `{{Page ID}}` (Notion automation variable expands to the row's UUID). No JSON, no extra fields.
 
-`event_type` is now optional from Notion's side because the Worker
-re-asserts it from `DISPATCH_EVENT_TYPE` in `wrangler.toml`, but
-keeping it in the Notion body is harmless for debugging.
+The Worker re-asserts `event_type` from `DISPATCH_EVENT_TYPE` in
+`wrangler.toml`, so Notion does not need to send it. This sidesteps
+the Notion automation limitation that prevents setting `Content-Type`
+in the Webhook custom headers section.
 
 ## Generating `NOTION_SHARED_SECRET`
 
@@ -109,15 +114,13 @@ URL=https://vueprix-webhook-proxy.<subdomain>.workers.dev
 # Expected: 401
 curl -sS -o /dev/null -w '%{http_code}\n' \
   -X POST "$URL" \
-  -H 'Content-Type: application/json' \
-  -d '{"page_id":"12345678-90ab-cdef-1234-567890abcdef"}'
+  -d '12345678-90ab-cdef-1234-567890abcdef'
 
 # Expected: 202 (fires a real repository_dispatch — use a throwaway page_id)
 curl -sS -o /dev/null -w '%{http_code}\n' \
   -X POST "$URL" \
-  -H 'Content-Type: application/json' \
   -H "X-Notion-Secret: $SECRET" \
-  -d '{"page_id":"12345678-90ab-cdef-1234-567890abcdef"}'
+  -d '12345678-90ab-cdef-1234-567890abcdef'
 ```
 
 The `202` smoke test will trigger the real `bot-publish.yml` workflow,

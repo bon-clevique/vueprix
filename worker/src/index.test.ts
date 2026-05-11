@@ -19,23 +19,19 @@ function buildReq(
   init: {
     method?: string;
     secret?: string | null;
-    body?: unknown;
-    rawBody?: string;
+    body?: string;
   } = {},
 ): Request {
-  const headers = new Headers({ 'Content-Type': 'application/json' });
+  // Notion automation は Content-Type Header を設定できないため、Worker は
+  // Header 不在で plain text body を受信する前提。test もそれを模す。
+  const headers = new Headers();
   if (init.secret !== null && init.secret !== undefined) {
     headers.set('X-Notion-Secret', init.secret);
   }
   return new Request('https://example.workers.dev/', {
     method: init.method ?? 'POST',
     headers,
-    body:
-      init.rawBody !== undefined
-        ? init.rawBody
-        : init.body !== undefined
-          ? JSON.stringify(init.body)
-          : undefined,
+    body: init.body,
   });
 }
 
@@ -95,7 +91,7 @@ describe('webhook proxy fetch handler', () => {
 
   it('rejects missing X-Notion-Secret header with 401', async () => {
     const res = await handler.fetch(
-      buildReq({ secret: null, body: { page_id: VALID_PAGE_ID } }),
+      buildReq({ secret: null, body: VALID_PAGE_ID }),
       buildEnv(),
     );
     expect(res.status).toBe(401);
@@ -104,37 +100,38 @@ describe('webhook proxy fetch handler', () => {
 
   it('rejects mismatched X-Notion-Secret header with 401', async () => {
     const res = await handler.fetch(
-      buildReq({ secret: 'wrong', body: { page_id: VALID_PAGE_ID } }),
+      buildReq({ secret: 'wrong', body: VALID_PAGE_ID }),
       buildEnv(),
     );
     expect(res.status).toBe(401);
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it('rejects malformed JSON with 400', async () => {
+  it('rejects empty body with 400', async () => {
     const res = await handler.fetch(
-      buildReq({ secret: 'shared-secret-xyz', rawBody: '{not json' }),
+      buildReq({ secret: 'shared-secret-xyz', body: '' }),
       buildEnv(),
     );
     expect(res.status).toBe(400);
-    expect(await res.text()).toBe('Invalid JSON');
+    expect(await res.text()).toBe('Invalid page_id');
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it('rejects empty page_id with 400', async () => {
+  it('rejects non-UUID body with 400', async () => {
     const res = await handler.fetch(
-      buildReq({ secret: 'shared-secret-xyz', body: { page_id: '' } }),
+      buildReq({ secret: 'shared-secret-xyz', body: 'not-a-uuid' }),
       buildEnv(),
     );
     expect(res.status).toBe(400);
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it('rejects non-UUID page_id with 400', async () => {
+  it('rejects legacy JSON body (regex match fails) with 400', async () => {
+    // 旧フォーマット (`{"page_id":"..."}`) は plain text として regex に一致しないため拒否される。
     const res = await handler.fetch(
       buildReq({
         secret: 'shared-secret-xyz',
-        body: { page_id: 'not-a-uuid' },
+        body: `{"page_id":"${VALID_PAGE_ID_NODASH}"}`,
       }),
       buildEnv(),
     );
@@ -142,9 +139,12 @@ describe('webhook proxy fetch handler', () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it('rejects non-string page_id with 400', async () => {
+  it('rejects UUID with extra suffix (regex end-anchor) with 400', async () => {
     const res = await handler.fetch(
-      buildReq({ secret: 'shared-secret-xyz', body: { page_id: 42 } }),
+      buildReq({
+        secret: 'shared-secret-xyz',
+        body: `${VALID_PAGE_ID_NODASH}X`,
+      }),
       buildEnv(),
     );
     expect(res.status).toBe(400);
@@ -155,10 +155,7 @@ describe('webhook proxy fetch handler', () => {
     fetchMock.mockResolvedValueOnce(new Response(null, { status: 204 }));
 
     const res = await handler.fetch(
-      buildReq({
-        secret: 'shared-secret-xyz',
-        body: { page_id: VALID_PAGE_ID },
-      }),
+      buildReq({ secret: 'shared-secret-xyz', body: VALID_PAGE_ID }),
       buildEnv(),
     );
 
@@ -188,7 +185,7 @@ describe('webhook proxy fetch handler', () => {
     const res = await handler.fetch(
       buildReq({
         secret: 'shared-secret-xyz',
-        body: { page_id: VALID_PAGE_ID_NODASH },
+        body: VALID_PAGE_ID_NODASH,
       }),
       buildEnv(),
     );
@@ -202,6 +199,46 @@ describe('webhook proxy fetch handler', () => {
     });
   });
 
+  it('accepts UUID with surrounding whitespace after trim', async () => {
+    fetchMock.mockResolvedValueOnce(new Response(null, { status: 204 }));
+
+    const res = await handler.fetch(
+      buildReq({
+        secret: 'shared-secret-xyz',
+        body: `  ${VALID_PAGE_ID_NODASH}  `,
+      }),
+      buildEnv(),
+    );
+
+    expect(res.status).toBe(202);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const reqInit = fetchMock.mock.calls[0]![1] as RequestInit;
+    expect(JSON.parse(reqInit.body as string)).toEqual({
+      event_type: 'vueprix-publish',
+      client_payload: { page_id: VALID_PAGE_ID_NODASH },
+    });
+  });
+
+  it('accepts UUID with trailing newline after trim', async () => {
+    fetchMock.mockResolvedValueOnce(new Response(null, { status: 204 }));
+
+    const res = await handler.fetch(
+      buildReq({
+        secret: 'shared-secret-xyz',
+        body: `${VALID_PAGE_ID}\n`,
+      }),
+      buildEnv(),
+    );
+
+    expect(res.status).toBe(202);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const reqInit = fetchMock.mock.calls[0]![1] as RequestInit;
+    expect(JSON.parse(reqInit.body as string)).toEqual({
+      event_type: 'vueprix-publish',
+      client_payload: { page_id: VALID_PAGE_ID },
+    });
+  });
+
   it('returns 502 when GitHub responds non-2xx', async () => {
     const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
     fetchMock.mockResolvedValueOnce(
@@ -209,10 +246,7 @@ describe('webhook proxy fetch handler', () => {
     );
 
     const res = await handler.fetch(
-      buildReq({
-        secret: 'shared-secret-xyz',
-        body: { page_id: VALID_PAGE_ID },
-      }),
+      buildReq({ secret: 'shared-secret-xyz', body: VALID_PAGE_ID }),
       buildEnv(),
     );
 

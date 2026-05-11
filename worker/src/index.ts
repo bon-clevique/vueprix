@@ -41,14 +41,15 @@ const handler = {
       return new Response('Unauthorized', { status: 401 });
     }
 
-    // 3. Parse body and validate the page_id.
-    let body: { page_id?: unknown };
+    // 3. Body 受信 (plain text の page_id 文字列単体)
+    //    Notion automation の Content-Type Header 設定不可制約に対応するため、JSON parse を行わず
+    //    text として受信して trim 後に UUID validation で全文 match を厳格チェックする。
+    let pageId: string;
     try {
-      body = (await req.json()) as { page_id?: unknown };
+      pageId = (await req.text()).trim();
     } catch {
-      return new Response('Invalid JSON', { status: 400 });
+      return new Response('Body read failed', { status: 400 });
     }
-    const pageId = typeof body.page_id === 'string' ? body.page_id : '';
     if (!NOTION_PAGE_ID_RE.test(pageId)) {
       return new Response('Invalid page_id', { status: 400 });
     }
