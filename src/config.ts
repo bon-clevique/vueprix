@@ -1,3 +1,5 @@
+import type { NotionCategory } from './category.js';
+
 export const FIXED_ASINS: readonly string[] = [
   "B0C1JGD2T6", // カリタ コーヒーフィルター ウェーブシリーズ KWF-155 ホワイト 50枚×2個
   "B09QMHL2NN", // 青森産 ホタテ貝殻焼成パウダー 1kg パウチ 野菜洗い・掃除用
@@ -25,10 +27,22 @@ export const KEEPA_CATEGORIES: readonly number[] = [
   3477981,
 ];
 
+// Notion ドラフト候補のソート順 (左ほど優先)。
+// fixed-list = FIXED_ASINS 由来の個別優先商品 (常に最優先)。
+// それ以外は Keepa カテゴリ。ガジェット系 (pc-desk/gaming/audio) を食品より優先。
+export const CATEGORY_PRIORITY: readonly NotionCategory[] = [
+  'fixed-list',
+  'pc-desk',
+  'gaming',
+  'audio',
+  'health',
+  'food',
+];
+
 export const DROP_THRESHOLD_PERCENT = 15;
 export const HISTORY_DAYS = 90;
 
-export const MAX_POSTS_PER_RUN = 2;
+export const MAX_POSTS_PER_RUN = 10;
 export const MIN_PRICE_YEN = 500;
 export const COOLDOWN_HOURS = 24;
 
