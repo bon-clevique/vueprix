@@ -58,7 +58,7 @@ const handler = {
       try {
         const parsed = JSON.parse(rawBody) as { data?: { id?: unknown } };
         const id = parsed?.data?.id;
-        if (typeof id === 'string') {
+        if (typeof id === 'string' && id.trim() !== '') {
           pageId = id.trim();
         }
       } catch {

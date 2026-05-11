@@ -379,6 +379,29 @@ describe('webhook proxy fetch handler', () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
+  it('rejects envelope with empty string data.id', async () => {
+    const res = await handler.fetch(
+      buildReq({
+        secret: 'shared-secret-xyz',
+        body: JSON.stringify({
+          source: {
+            type: 'automation',
+            automation_id: 'aut-1',
+            action_id: 'act-1',
+            event_id: 'evt-1',
+            user_id: 'usr-1',
+            attempt: 1,
+          },
+          data: { object: 'page', id: '' },
+        }),
+      }),
+      buildEnv(),
+    );
+    expect(res.status).toBe(400);
+    expect(await res.text()).toBe('Invalid page_id');
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it('rejects empty JSON object `{}` with 400', async () => {
     const res = await handler.fetch(
       buildReq({ secret: 'shared-secret-xyz', body: '{}' }),
