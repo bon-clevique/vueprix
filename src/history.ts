@@ -17,7 +17,6 @@ export interface PostHistoryEntry {
   source: 'deals' | 'fixed' | 'publish';
   category: NotionCategory;
   reason: string;
-  dryRun: boolean;
   posters: Record<string, boolean>;
 }
 

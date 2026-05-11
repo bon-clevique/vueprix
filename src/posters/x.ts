@@ -1,7 +1,7 @@
 import { TwitterApi } from 'twitter-api-v2';
 import { X_MAX_CHARS } from '../config.js';
 import { logger } from '../logger.js';
-import { buildPostText, isDryRun } from './format.js';
+import { buildPostText } from './format.js';
 import type { Poster, PostInput } from './types.js';
 
 const redactedTweetError = (err: unknown): Error => {
@@ -12,10 +12,6 @@ const redactedTweetError = (err: unknown): Error => {
 
 const send = async (input: PostInput): Promise<void> => {
   const text = buildPostText(input, X_MAX_CHARS);
-  if (isDryRun()) {
-    logger.info('poster.x', '[DRY RUN] X post', { asin: input.product.asin, text });
-    return;
-  }
   const apiKey = process.env.X_API_KEY;
   const apiSecret = process.env.X_API_SECRET;
   const accessToken = process.env.X_ACCESS_TOKEN;

@@ -47,7 +47,8 @@ describe('publish entrypoint', () => {
   const buildApprovedPage = (overrides: Record<string, unknown> = {}) => ({
     id: 'page-1',
     properties: {
-      Status: { select: { name: 'approved' } },
+      // PR-8: Status は status type (旧: select)
+      Status: { status: { name: 'approved' } },
       ASIN: { rich_text: [{ plain_text: 'B0FKL' }] },
       '名前': { title: [{ plain_text: 'sample' }] },
       '投稿文_X': { rich_text: [{ plain_text: 'X text' }] },
@@ -58,23 +59,8 @@ describe('publish entrypoint', () => {
       '通常価格': { number: 1000 },
       '割引率': { number: 0.15 },
       'カテゴリ': { select: { name: 'food' } },
-      DryRun: { checkbox: false },
       ...overrides,
     },
-  });
-
-  it('skips posters and marks Status=posted when DryRun=true', async () => {
-    pagesRetrieveMock.mockResolvedValueOnce(
-      buildApprovedPage({ DryRun: { checkbox: true } }),
-    );
-    pagesUpdateMock.mockResolvedValueOnce({});
-    const { main } = await import('./publish.js');
-    await main(['node', 'publish.ts', '--page-id', '0123456789abcdef0123456789abcdef']);
-    expect(xPostMock).not.toHaveBeenCalled();
-    expect(blueskyPostMock).not.toHaveBeenCalled();
-    expect(pagesUpdateMock).toHaveBeenCalledTimes(1);
-    const arg = pagesUpdateMock.mock.calls[0]?.[0] as { properties: Record<string, unknown> };
-    expect(arg.properties.Status).toEqual({ select: { name: 'posted' } });
   });
 
   it('does not mark Status=posted when all posters fail, but increments failure count', async () => {
@@ -121,7 +107,8 @@ describe('publish entrypoint', () => {
     expect(pagesUpdateMock).toHaveBeenCalledTimes(1);
     const arg = pagesUpdateMock.mock.calls[0]?.[0] as { properties: Record<string, unknown> };
     expect(arg.properties['投稿失敗回数']).toEqual({ number: 3 });
-    expect(arg.properties.Status).toEqual({ select: { name: 'blocked' } });
+    // PR-8: Status は status type
+    expect(arg.properties.Status).toEqual({ status: { name: 'blocked' } });
   });
 
   it('marks Status=posted when at least one poster succeeds', async () => {
@@ -133,12 +120,14 @@ describe('publish entrypoint', () => {
     await main(['node', 'publish.ts', '--page-id', '0123456789abcdef0123456789abcdef']);
     expect(pagesUpdateMock).toHaveBeenCalledTimes(1);
     const arg = pagesUpdateMock.mock.calls[0]?.[0] as { properties: Record<string, unknown> };
-    expect(arg.properties.Status).toEqual({ select: { name: 'posted' } });
+    // PR-8: Status は status type
+    expect(arg.properties.Status).toEqual({ status: { name: 'posted' } });
   });
 
   it('returns early without throwing when page is not approved', async () => {
     pagesRetrieveMock.mockResolvedValueOnce(
-      buildApprovedPage({ Status: { select: { name: 'pending_review' } } }),
+      // PR-8: Status は status type
+      buildApprovedPage({ Status: { status: { name: 'pending_review' } } }),
     );
     const { main } = await import('./publish.js');
     await expect(
@@ -183,10 +172,11 @@ describe('publish entrypoint', () => {
   });
 
   it('accepts both dashed and undashed UUID formats', async () => {
-    pagesRetrieveMock.mockResolvedValue(
-      buildApprovedPage({ DryRun: { checkbox: true } }),
-    );
+    // PR-8: DryRun 廃止後は posters 成功シナリオで両 UUID 形式が受理されることを確認。
+    pagesRetrieveMock.mockResolvedValue(buildApprovedPage());
     pagesUpdateMock.mockResolvedValue({});
+    xPostMock.mockResolvedValue(undefined);
+    blueskyPostMock.mockResolvedValue(undefined);
     const { main } = await import('./publish.js');
     await expect(
       main(['node', 'publish.ts', '--page-id', '01234567-89ab-cdef-0123-456789abcdef']),

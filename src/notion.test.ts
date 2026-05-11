@@ -146,7 +146,6 @@ describe('createDraftPage', () => {
       referencePrice: 1000,
       dropPercent: 15,
       category: 'food',
-      dryRun: false,
       generatedAt: new Date('2026-05-09T12:00:00.000Z'),
     });
     expect(id).toBe('page-abc');
@@ -156,7 +155,8 @@ describe('createDraftPage', () => {
       properties: Record<string, unknown>;
     };
     expect(arg.parent).toEqual({ type: 'data_source_id', data_source_id: 'ds-uuid-123' });
-    expect(arg.properties.Status).toEqual({ select: { name: 'pending_review' } });
+    // PR-8: Status は status type (旧 select)。書き込み形式 `status: { name }`
+    expect(arg.properties.Status).toEqual({ status: { name: 'pending_review' } });
     expect(arg.properties.ASIN).toEqual({ rich_text: [{ type: 'text', text: { content: 'B0FKLMMS2G' } }] });
     expect(arg.properties['投稿文_X']).toEqual({ rich_text: [{ type: 'text', text: { content: 'X text' } }] });
     expect(arg.properties['投稿文_Bluesky']).toEqual({ rich_text: [{ type: 'text', text: { content: 'Bluesky text' } }] });
@@ -164,10 +164,12 @@ describe('createDraftPage', () => {
     expect(arg.properties['通常価格']).toEqual({ number: 1000 });
     expect(arg.properties['セール価格']).toEqual({ number: 850 });
     expect(arg.properties['割引率']).toEqual({ number: 0.15 });
+    // カテゴリは引き続き select type (PR-8 で status 化したのは Status property のみ)
     expect(arg.properties['カテゴリ']).toEqual({ select: { name: 'food' } });
     expect(arg.properties['サクラチェッカーURL']).toEqual({ url: 'https://sakura-checker.jp/search/B0FKLMMS2G/' });
     expect(arg.properties['候補生成日時']).toEqual({ date: { start: '2026-05-09T12:00:00.000Z' } });
-    expect(arg.properties.DryRun).toEqual({ checkbox: false });
+    // PR-8: DryRun property は廃止
+    expect(arg.properties.DryRun).toBeUndefined();
   });
 
   it('throws when env not configured', async () => {
@@ -186,7 +188,6 @@ describe('createDraftPage', () => {
         referencePrice: 0,
         dropPercent: 0,
         category: 'food',
-        dryRun: false,
         generatedAt: new Date(),
       }),
     ).rejects.toThrow();
@@ -217,7 +218,8 @@ describe('updateStatusToPosted', () => {
     expect(pagesUpdateMock).toHaveBeenCalledTimes(1);
     const arg = pagesUpdateMock.mock.calls[0]?.[0] as { page_id: string; properties: Record<string, unknown> };
     expect(arg.page_id).toBe('page-1');
-    expect(arg.properties.Status).toEqual({ select: { name: 'posted' } });
+    // PR-8: Status は status type
+    expect(arg.properties.Status).toEqual({ status: { name: 'posted' } });
     expect(arg.properties['投稿日時']).toEqual({ date: { start: '2026-05-09T14:00:00.000Z' } });
   });
 });
@@ -242,7 +244,8 @@ describe('fetchPageById', () => {
   const buildPage = (status: string, overrides: Record<string, unknown> = {}) => ({
     id: 'page-1',
     properties: {
-      Status: { select: { name: status } },
+      // PR-8: Status は status type に変更 (旧: select)
+      Status: { status: { name: status } },
       ASIN: { rich_text: [{ plain_text: 'B0FKL' }] },
       '名前': { title: [{ plain_text: 'sample title' }] },
       '投稿文_X': { rich_text: [{ plain_text: 'X text' }] },
@@ -253,7 +256,6 @@ describe('fetchPageById', () => {
       '通常価格': { number: 1000 },
       '割引率': { number: 0.15 },
       'カテゴリ': { select: { name: 'food' } },
-      DryRun: { checkbox: false },
       ...overrides,
     },
   });
@@ -274,7 +276,6 @@ describe('fetchPageById', () => {
       referencePrice: 1000,
       dropPercent: 15,
       category: 'food',
-      dryRun: false,
       postedAt: null,
     });
   });
@@ -318,7 +319,8 @@ describe('fetchPageById', () => {
     pagesRetrieveMock.mockResolvedValueOnce({
       id: 'page-1',
       properties: {
-        Status: { select: null },
+        // PR-8: Status は status type
+        Status: { status: null },
         ASIN: { rich_text: [{ plain_text: 'B0FKL' }] },
         '名前': { title: [{ plain_text: 'x' }] },
         '投稿文_X': { rich_text: [{ plain_text: '' }] },
@@ -329,7 +331,6 @@ describe('fetchPageById', () => {
         '通常価格': { number: 0 },
         '割引率': { number: 0 },
         'カテゴリ': { select: { name: 'food' } },
-        DryRun: { checkbox: false },
       },
     });
     const { fetchPageById } = await import('./notion.js');
@@ -355,13 +356,6 @@ describe('fetchPageById', () => {
     pagesRetrieveMock.mockResolvedValueOnce(buildPage('posted'));
     const { fetchPageById } = await import('./notion.js');
     await expect(fetchPageById('page-1')).rejects.toThrow(/posted/);
-  });
-
-  it('preserves dryRun=true from page', async () => {
-    pagesRetrieveMock.mockResolvedValueOnce(buildPage('approved', { DryRun: { checkbox: true } }));
-    const { fetchPageById } = await import('./notion.js');
-    const payload = await fetchPageById('page-1');
-    expect(payload.dryRun).toBe(true);
   });
 });
 
@@ -417,7 +411,8 @@ describe('incrementFailureCount', () => {
     expect(result).toEqual({ count: 3, blocked: true });
     const arg = pagesUpdateMock.mock.calls[0]?.[0] as { properties: Record<string, unknown> };
     expect(arg.properties['投稿失敗回数']).toEqual({ number: 3 });
-    expect(arg.properties.Status).toEqual({ select: { name: 'blocked' } });
+    // PR-8: Status は status type
+    expect(arg.properties.Status).toEqual({ status: { name: 'blocked' } });
   });
 
   it('treats missing 投稿失敗回数 property as 0 baseline', async () => {
@@ -495,12 +490,13 @@ describe('queryDuplicateAsins', () => {
     expect(result).toEqual(new Set(['B001', 'B002']));
     const arg = dataSourcesQueryMock.mock.calls[0]?.[0] as Record<string, unknown>;
     expect(arg.data_source_id).toBe('ds-uuid-123');
-    const filter = arg.filter as { and: Array<{ or?: Array<{ property: string; select?: { equals: string } }>; property?: string; date?: { on_or_after: string } }> };
+    const filter = arg.filter as { and: Array<{ or?: Array<{ property: string; status?: { equals: string } }>; property?: string; date?: { on_or_after: string } }> };
     expect(filter.and).toHaveLength(2);
+    // PR-8: Status filter は status: { equals } 形式
     expect(filter.and[0]?.or).toEqual([
-      { property: 'Status', select: { equals: 'pending_review' } },
-      { property: 'Status', select: { equals: 'approved' } },
-      { property: 'Status', select: { equals: 'posted' } },
+      { property: 'Status', status: { equals: 'pending_review' } },
+      { property: 'Status', status: { equals: 'approved' } },
+      { property: 'Status', status: { equals: 'posted' } },
     ]);
     expect(filter.and[1]?.property).toBe('候補生成日時');
   });
@@ -564,7 +560,8 @@ describe('expireOldDrafts', () => {
 
   const buildPendingReviewPage = (id: string) => ({
     id,
-    properties: { Status: { select: { name: 'pending_review' } } },
+    // PR-8: Status は status type
+    properties: { Status: { status: { name: 'pending_review' } } },
   });
 
   it('queries pending_review older than slaHours and updates each to expired', async () => {
@@ -581,11 +578,12 @@ describe('expireOldDrafts', () => {
     expect(count).toBe(2);
     expect(pagesUpdateMock).toHaveBeenCalledTimes(2);
     expect(pagesRetrieveMock).toHaveBeenCalledTimes(2);
-    const arg = dataSourcesQueryMock.mock.calls[0]?.[0] as { filter: { and: Array<{ property: string; select?: { equals: string }; date?: { before: string } }> } };
-    expect(arg.filter.and[0]?.select).toEqual({ equals: 'pending_review' });
+    const arg = dataSourcesQueryMock.mock.calls[0]?.[0] as { filter: { and: Array<{ property: string; status?: { equals: string }; date?: { before: string } }> } };
+    // PR-8: Status filter は status: { equals } 形式
+    expect(arg.filter.and[0]?.status).toEqual({ equals: 'pending_review' });
     expect(arg.filter.and[1]?.date?.before).toBe('2026-05-09T02:00:00.000Z');
     const updateArg = pagesUpdateMock.mock.calls[0]?.[0] as { properties: Record<string, unknown> };
-    expect(updateArg.properties.Status).toEqual({ select: { name: 'expired' } });
+    expect(updateArg.properties.Status).toEqual({ status: { name: 'expired' } });
   });
 
   it('returns 0 when no candidates match', async () => {
@@ -604,7 +602,8 @@ describe('expireOldDrafts', () => {
     // human が直前に approved に変えたケースを想定 — retrieve 時点では approved
     pagesRetrieveMock.mockResolvedValueOnce({
       id: 'p-1',
-      properties: { Status: { select: { name: 'approved' } } },
+      // PR-8: Status は status type
+      properties: { Status: { status: { name: 'approved' } } },
     });
     const { expireOldDrafts } = await import('./notion.js');
     const count = await expireOldDrafts(new Date());
@@ -634,7 +633,7 @@ describe('expireOldDrafts', () => {
     });
     pagesRetrieveMock.mockResolvedValue({
       id: 'p',
-      properties: { Status: { select: { name: 'pending_review' } } },
+      properties: { Status: { status: { name: 'pending_review' } } },
     });
     pagesUpdateMock.mockResolvedValue({});
     const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
@@ -655,7 +654,7 @@ describe('expireOldDrafts', () => {
     });
     pagesRetrieveMock.mockResolvedValue({
       id: 'p',
-      properties: { Status: { select: { name: 'pending_review' } } },
+      properties: { Status: { status: { name: 'pending_review' } } },
     });
     pagesUpdateMock.mockResolvedValue({});
     const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
@@ -674,7 +673,7 @@ describe('expireOldDrafts', () => {
     });
     pagesRetrieveMock.mockResolvedValue({
       id: 'p',
-      properties: { Status: { select: { name: 'pending_review' } } },
+      properties: { Status: { status: { name: 'pending_review' } } },
     });
     pagesUpdateMock.mockResolvedValue({});
     const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});

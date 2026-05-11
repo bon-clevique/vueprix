@@ -97,8 +97,10 @@ Cloudflare Worker 中間プロキシ (PR-4 / PR-5) 経由の end-to-end が以�
 
 動作確認の証跡:
 
-- bot-publish run `25645553252` (2026-05-11 01:27): Worker 経由 dispatch → DryRun=true page で posters skip → Status=posted 更新成功
+- bot-publish run `25645553252` (2026-05-11 01:27): Worker 経由 dispatch → DryRun=true page で posters skip → Status=posted 更新成功 (※ DRY_RUN モードは PR-8 で廃止済。本 record は歴史記録)
 - bot-publish run `25645537362` (2026-05-11 01:27): 直接 curl dispatch → pending_review page で early return (Status guard 動作確認)
+
+> **PR-8 (2026-05-11) で `DRY_RUN` 環境変数 + `DryRun` checkbox property は廃止**。`DRY_RUN=true` ガード前提の試運転モード (Notion の draft 作成だけ行う / poster は no-op) は不要との判断 (本番 1 本化 + 二重ガードの簡素化)。承認 → publish フロー (Status=approved → repository_dispatch → 投稿) と Status 二重ガード (`fetchPageById` の approved check + `投稿日時` セット済 early return) のみで運用する。Status property は同 PR で select → status type に変更し、Notion 標準の状態管理 (todo / in_progress / complete グルーピング) に乗せた。
 
 過去の trial-and-error 記録 (今後の debug 時短のため):
 

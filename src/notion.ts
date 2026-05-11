@@ -9,13 +9,13 @@ import {
 } from './config.js';
 import { logger } from './logger.js';
 
-// Notion DB「vueprix 投稿文」schema (Phase 1 で 2026-05-09 / 2026-05-10 に拡張済):
+// Notion DB「vueprix 投稿文」schema (Phase 1 で 2026-05-09 / 2026-05-10 / 2026-05-11 に拡張済):
 //   - 名前 (title): 商品名
 //   - 理由 (rich_text): Claude 生成 reason
 //   - ASIN (rich_text)
 //   - 投稿文_X (rich_text)
 //   - 投稿文_Bluesky (rich_text)
-//   - Status (select: pending_review/approved/rejected/posted/expired/blocked)
+//   - Status (status: pending_review/approved/rejected/posted/expired/blocked) — PR-8 で select → status type に変更
 //   - 候補生成日時 (date)
 //   - 投稿日時 (date)
 //   - サクラチェッカーURL (url)
@@ -23,7 +23,6 @@ import { logger } from './logger.js';
 //   - 通常価格 / セール価格 (number, yen)
 //   - 割引率 (number, percent)
 //   - カテゴリ (select: food/health/pc-desk/gaming/audio/fixed-list)
-//   - DryRun (checkbox)
 //   - 投稿失敗回数 (number): publish 失敗連続カウンタ。MAX_PUBLISH_FAILURES に達すると Status=blocked
 //   - 最終エラー (rich_text): 直近の publish 失敗内容 (truncate 1900)
 //   - 関連ガイドライン (relation, optional)
@@ -75,7 +74,7 @@ export const CATEGORY = {
   FIXED_LIST: 'fixed-list',
 } as const;
 
-// Runtime membership check 用の Set。`extractSelect` が返す任意の string を
+// Runtime membership check 用の Set。`extractStatus` / `extractSelect` が返す任意の string を
 // Status / NotionCategory に narrow するための型 guard と組で使う。
 const STATUS_VALUES: ReadonlySet<string> = new Set(Object.values(STATUS));
 const CATEGORY_VALUES: ReadonlySet<string> = new Set(Object.values(CATEGORY));
@@ -99,7 +98,6 @@ export interface DraftCandidate {
   referencePrice: number;
   dropPercent: number;
   category: NotionCategory;
-  dryRun: boolean;
   generatedAt: Date;
   guidelineRelations?: readonly string[];
 }
@@ -122,7 +120,6 @@ export interface DraftPayload {
   referencePrice: number;
   dropPercent: number;
   category: NotionCategory;
-  dryRun: boolean;
   postedAt: string | null;
 }
 
@@ -232,8 +229,7 @@ export const fetchActiveGuidelines = async (): Promise<Guideline[]> => {
 export const createDraftPage = async (draft: DraftCandidate): Promise<string> => {
   const dataSourceId = requireConfigured();
   const client = buildClient();
-  const bodyPrefix = draft.dryRun ? '[DRY RUN]\n' : '';
-  const body = `${bodyPrefix}X:\n${draft.postTextX}\n\nBluesky:\n${draft.postTextBluesky}`;
+  const body = `X:\n${draft.postTextX}\n\nBluesky:\n${draft.postTextBluesky}`;
   const relations = (draft.guidelineRelations ?? []).map((id) => ({ id }));
   const res = await client.pages.create({
     // Notion API v2026-03-11 では parent は data_source_id を指定する。
@@ -262,8 +258,8 @@ export const createDraftPage = async (draft: DraftCandidate): Promise<string> =>
       'カテゴリ': { select: { name: draft.category } },
       'サクラチェッカーURL': { url: buildSakuraCheckerUrl(draft.asin) },
       '候補生成日時': { date: { start: draft.generatedAt.toISOString() } },
-      Status: { select: { name: STATUS.PENDING_REVIEW } },
-      DryRun: { checkbox: draft.dryRun },
+      // Status は Notion 側で「status」type (PR-8 で select から変更)。書き込み形式も `status: { name }`。
+      Status: { status: { name: STATUS.PENDING_REVIEW } },
       ...(relations.length > 0 ? { '関連ガイドライン': { relation: relations } } : {}),
     },
     children: [
@@ -286,7 +282,7 @@ export const updateStatusToPosted = async (pageId: string, postedAt: Date): Prom
   await client.pages.update({
     page_id: pageId,
     properties: {
-      Status: { select: { name: STATUS.POSTED } },
+      Status: { status: { name: STATUS.POSTED } },
       '投稿日時': { date: { start: postedAt.toISOString() } },
     },
   });
@@ -318,6 +314,14 @@ const extractSelect = (prop: unknown): string => {
   return select?.name ?? '';
 };
 
+// PR-8: Notion の status property type は `status: { name, color, id }` を返す。
+// select と shape は似ているが property type が違うため別 helper にしている。
+const extractStatus = (prop: unknown): string => {
+  if (!prop || typeof prop !== 'object') return '';
+  const status = (prop as { status?: { name?: string } | null }).status;
+  return status?.name ?? '';
+};
+
 const extractNumber = (prop: unknown): number => {
   if (!prop || typeof prop !== 'object') return 0;
   return (prop as { number?: number }).number ?? 0;
@@ -326,11 +330,6 @@ const extractNumber = (prop: unknown): number => {
 const extractUrl = (prop: unknown): string | null => {
   if (!prop || typeof prop !== 'object') return null;
   return (prop as { url?: string | null }).url ?? null;
-};
-
-const extractCheckbox = (prop: unknown): boolean => {
-  if (!prop || typeof prop !== 'object') return false;
-  return (prop as { checkbox?: boolean }).checkbox ?? false;
 };
 
 // Notion date property の date.start を ISO 文字列で返す。未設定 / null / 空文字は全て null。
@@ -375,7 +374,7 @@ export const incrementFailureCount = async (
   await client.pages.update({
     page_id: pageId,
     properties: blocked
-      ? { ...baseProperties, Status: { select: { name: STATUS.BLOCKED } } }
+      ? { ...baseProperties, Status: { status: { name: STATUS.BLOCKED } } }
       : baseProperties,
   });
   logger.info('notion', 'failure count incremented', { pageId, count: nextCount, blocked });
@@ -390,7 +389,7 @@ export const incrementFailureCount = async (
 export const updateStatusToExpired = async (pageId: string): Promise<void> => {
   const client = buildClient();
   const page = (await client.pages.retrieve({ page_id: pageId })) as unknown as NotionPageRich;
-  const currentStatus = extractSelect(page.properties.Status);
+  const currentStatus = extractStatus(page.properties.Status);
   if (currentStatus !== STATUS.PENDING_REVIEW) {
     logger.info('notion', 'expire skipped (status changed during query)', { pageId, currentStatus });
     return;
@@ -398,7 +397,7 @@ export const updateStatusToExpired = async (pageId: string): Promise<void> => {
   await client.pages.update({
     page_id: pageId,
     properties: {
-      Status: { select: { name: STATUS.EXPIRED } },
+      Status: { status: { name: STATUS.EXPIRED } },
     },
   });
   logger.info('notion', 'status updated to expired', { pageId });
@@ -410,9 +409,9 @@ export const fetchPageById = async (pageId: string): Promise<DraftPayload> => {
   const client = buildClient();
   const page = (await client.pages.retrieve({ page_id: pageId })) as unknown as NotionPageRich;
   const props = page.properties;
-  const rawStatus = extractSelect(props.Status);
+  const rawStatus = extractStatus(props.Status);
   // 任意 string → Status の narrow を runtime check 経由に統一 (旧: `as Status`)。
-  // 空文字 / typo / 未知の Notion select option は全て fail-fast。
+  // 空文字 / typo / 未知の Notion status option は全て fail-fast。
   if (!isStatus(rawStatus)) {
     throw new Error(`pageId=${pageId} status=${rawStatus || '(empty)'} (not a known Status value)`);
   }
@@ -438,7 +437,6 @@ export const fetchPageById = async (pageId: string): Promise<DraftPayload> => {
     // 高精度 round 経由で integer に丸め直す。
     dropPercent: Math.round(Math.round(extractNumber(props['割引率']) * 1_000_000) / 10_000),
     category,
-    dryRun: extractCheckbox(props.DryRun),
     postedAt: extractDate(props['投稿日時']),
   };
 };
@@ -463,9 +461,9 @@ export const queryDuplicateAsins = async (now: Date): Promise<Set<string>> => {
     and: [
       {
         or: [
-          { property: 'Status', select: { equals: STATUS.PENDING_REVIEW } },
-          { property: 'Status', select: { equals: STATUS.APPROVED } },
-          { property: 'Status', select: { equals: STATUS.POSTED } },
+          { property: 'Status', status: { equals: STATUS.PENDING_REVIEW } },
+          { property: 'Status', status: { equals: STATUS.APPROVED } },
+          { property: 'Status', status: { equals: STATUS.POSTED } },
         ],
       },
       {
@@ -522,7 +520,7 @@ export const expireOldDrafts = async (
   const cutoff = new Date(now.getTime() - slaHours * 60 * 60 * 1000).toISOString();
   const filter = {
     and: [
-      { property: 'Status', select: { equals: STATUS.PENDING_REVIEW } },
+      { property: 'Status', status: { equals: STATUS.PENDING_REVIEW } },
       { property: '候補生成日時', date: { before: cutoff } },
     ],
   };

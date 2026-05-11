@@ -1,7 +1,7 @@
 import { AtpAgent } from '@atproto/api';
 import { BSKY_MAX_CHARS } from '../config.js';
 import { logger } from '../logger.js';
-import { buildPostText, isDryRun } from './format.js';
+import { buildPostText } from './format.js';
 import type { Poster, PostInput } from './types.js';
 
 const redactedBlueskyError = (phase: 'login' | 'post', err: unknown): Error => {
@@ -11,10 +11,6 @@ const redactedBlueskyError = (phase: 'login' | 'post', err: unknown): Error => {
 
 const send = async (input: PostInput): Promise<void> => {
   const text = buildPostText(input, BSKY_MAX_CHARS);
-  if (isDryRun()) {
-    logger.info('poster.bluesky', '[DRY RUN] Bluesky post', { asin: input.product.asin, text });
-    return;
-  }
   const identifier = process.env.BSKY_IDENTIFIER;
   const password = process.env.BSKY_PASSWORD;
   if (!identifier || !password) {

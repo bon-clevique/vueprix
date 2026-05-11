@@ -15,7 +15,7 @@ DB: 「vueprix 投稿文」(`collection://35b3ad52-d5ca-80f3-b57f-000b174abea1`)
 | ASIN | rich_text | Amazon ASIN (10 文字) |
 | 投稿文_X | rich_text | X 用に組み立て済の本文 (≤280 chars) |
 | 投稿文_Bluesky | rich_text | Bluesky 用に組み立て済の本文 (≤300 chars) |
-| Status | select | `pending_review` / `approved` / `rejected` / `posted` / `expired` |
+| Status | status | `pending_review` / `approved` / `rejected` / `posted` / `expired` / `blocked` (PR-8 で select → status type に変更) |
 | 候補生成日時 | date | draft 作成タイムスタンプ |
 | 投稿日時 | date | publish 完了タイムスタンプ |
 | サクラチェッカーURL | url | `https://sakura-checker.jp/search/<ASIN>/` |
@@ -24,7 +24,6 @@ DB: 「vueprix 投稿文」(`collection://35b3ad52-d5ca-80f3-b57f-000b174abea1`)
 | セール価格 | number (yen) | 現在価格 |
 | 割引率 | number (percent) | 0.15 = 15% (Notion percent property の保存形式) |
 | カテゴリ | select | `food` / `health` / `pc-desk` / `gaming` / `audio` / `fixed-list` |
-| DryRun | checkbox | `DRY_RUN=true` で生成された候補かを区別 |
 | 関連ガイドライン | relation | (任意) ガイドライン DB へのリンク |
 
 ## Notion automation (Status changed to approved → Webhook)

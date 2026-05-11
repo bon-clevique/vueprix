@@ -88,7 +88,6 @@ describe('draft.main integration', () => {
   beforeEach(() => {
     resetAllMocks();
     process.env.PAAPI_PARTNER_TAG = 'test-tag-22';
-    process.env.DRY_RUN = 'true';
     // KEEPA_CATEGORIES は config.ts に 5 件あるので、各 categoryId について getDealsMock が呼ばれる。
     // default で空配列を返すので、test 内で個別カテゴリだけ override する。
   });
