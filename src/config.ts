@@ -46,9 +46,6 @@ export const MAX_POSTS_PER_RUN = 10;
 export const MIN_PRICE_YEN = 500;
 export const COOLDOWN_HOURS = 24;
 
-export const X_MAX_CHARS = 280;
-export const BSKY_MAX_CHARS = 300;
-
 export const POST_HISTORY_PATH = "data/post-history.jsonl";
 
 // pending_review → expired SLA。bon の手動承認猶予 (時間)。
@@ -60,7 +57,3 @@ export const MAX_QUERY_PAGES = 10;
 
 // expireOldDrafts の件数閾値。これ以上の expire は運用異常 (bon の承認停滞 / 候補生成過多) として warn。
 export const EXPIRE_WARN_THRESHOLD = 5;
-
-// publish の連続失敗が本値に達すると Notion Status を blocked に自動遷移させる。
-// 一時的な X/Bluesky 障害との切り分けと、永続的な投稿不能 page の運用上の隔離を兼ねる。
-export const MAX_PUBLISH_FAILURES = 3;

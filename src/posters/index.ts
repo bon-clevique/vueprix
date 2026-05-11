@@ -4,5 +4,4 @@ import type { Poster } from './types.js';
 
 export const posters: Poster[] = [xPoster, blueskyPoster];
 export { dispatch, anySucceeded, type PostResult } from './dispatcher.js';
-export { buildPostText } from './format.js';
 export type { Poster, PostInput } from './types.js';

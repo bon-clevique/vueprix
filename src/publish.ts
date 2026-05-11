@@ -1,15 +1,12 @@
 import 'dotenv/config';
 import { randomBytes } from 'node:crypto';
-import { buildAffiliateUrl, requirePartnerTag } from './affiliate.js';
 import { appendHistory } from './history.js';
 import { logger } from './logger.js';
 import {
   fetchPageById,
-  incrementFailureCount,
   updateStatusToPosted,
   type DraftPayload,
 } from './notion.js';
-import type { ProductInfo } from './paapi.js';
 import { anySucceeded, dispatch, posters, type PostInput } from './posters/index.js';
 
 interface PublishArgs {
@@ -32,16 +29,6 @@ const parseArgs = (argv: readonly string[]): PublishArgs => {
   }
   return { pageId };
 };
-
-// HIGH (code) 対応: PAAPI_PARTNER_TAG 未設定時の silent fallback を廃止。
-// Notion 側に Amazon URL があればそれを優先、なければ requirePartnerTag() で fail-fast。
-const buildProductFromPayload = (payload: DraftPayload): ProductInfo => ({
-  asin: payload.asin,
-  title: payload.title,
-  imageUrl: '',
-  currentPrice: payload.currentPrice,
-  affiliateUrl: payload.amazonUrl ?? buildAffiliateUrl(payload.asin, requirePartnerTag()),
-});
 
 export const main = async (argv: readonly string[]): Promise<void> => {
   const startedAt = new Date();
@@ -77,28 +64,34 @@ export const main = async (argv: readonly string[]): Promise<void> => {
     return;
   }
 
-  // Notion AI 運用 (Claude API 廃止後) では、ドラフト作成時に「理由」property が空文字列で
-  // 入る。人が Notion 上で文言を埋めずに approved に遷移させると、buildPostText が空 reason
-  // で構造的に壊れた投稿 (「通常 ¥X → ¥Y」と「→ Amazon で見る」の間に空白行が残る) を
-  // 生成して X/Bluesky に流れる事故が起きる。空 reason の段階では publish を refuse する。
-  // 再実行可能性のため Status は approved のまま残す (人が「理由」を埋めて Notion automation
-  // を再発火させれば再投稿される)。
-  if (payload.reason.trim().length === 0) {
-    logger.warn('publish', 'reason is empty, refusing to post to avoid malformed output', {
+  // Notion AI 運用では、ドラフト作成時に「投稿文」property が空文字列で入る。人が Notion 上で
+  // 文言を埋めずに approved に遷移させると、X/Bluesky に空テキストが流れる事故が起きる。
+  // 空 投稿文 の段階では publish を refuse する。Status は approved のまま残し、人が文言を埋めて
+  // Notion automation を再発火させれば再投稿される。
+  if (payload.postText.trim().length === 0) {
+    logger.warn('publish', '投稿文 is empty, refusing to post', {
       pageId: args.pageId,
       asin: payload.asin,
     });
     return;
   }
 
-  const product = buildProductFromPayload(payload);
-  const input: PostInput = {
-    product,
-    reason: payload.reason,
-    referencePrice: payload.referencePrice,
-    dropPercent: payload.dropPercent,
-  };
+  // X の文字数上限 (280) を超える 投稿文 が Notion に書かれた場合、X は API エラー、Bluesky は成功する
+  // (Bluesky 300 chars 上限内のため)。anySucceeded(result) が true になり Status=posted に遷移し、
+  // X への投稿は永久に失われる silent data loss が発生する。両 SNS に確実に投稿する目的を守るため
+  // 280 chars 超は publish 全体を refuse する (再投稿可能なまま approved に残す)。
+  const POST_TEXT_MAX_CHARS = 280;
+  if ([...payload.postText].length > POST_TEXT_MAX_CHARS) {
+    logger.warn('publish', '投稿文 exceeds X char limit, refusing to post', {
+      pageId: args.pageId,
+      asin: payload.asin,
+      length: [...payload.postText].length,
+      limit: POST_TEXT_MAX_CHARS,
+    });
+    return;
+  }
 
+  const input: PostInput = { asin: payload.asin, text: payload.postText };
   const result = await dispatch(posters, input);
   const succeeded = anySucceeded(result);
   const historyEntry = {
@@ -111,7 +104,6 @@ export const main = async (argv: readonly string[]): Promise<void> => {
     dropPercent: payload.dropPercent,
     source: 'publish' as const,
     category: payload.category,
-    reason: payload.reason,
     posters: result,
   };
   await appendHistory(historyEntry);
@@ -125,29 +117,10 @@ export const main = async (argv: readonly string[]): Promise<void> => {
     });
   } else {
     // 全 poster 失敗時は Status を posted に更新しない (再実行で再試行できるよう approved のまま残す)。
-    // ただし「投稿失敗回数」を Notion 側でカウントし、MAX_PUBLISH_FAILURES に達したら Status=blocked
-    // に自動遷移させる (永続的な投稿不能 page を運用上隔離する hook)。incrementFailureCount は内部で
-    // retrieve→update の 2-step。失敗内容は最終エラーに記録 (rich_text、truncate 1900 適用済)。
     logger.warn('publish', 'all posters failed, leaving status=approved for retry', {
       asin: payload.asin,
       result,
     });
-    try {
-      const { count, blocked } = await incrementFailureCount(args.pageId, JSON.stringify(result));
-      if (blocked) {
-        logger.warn('publish', 'page blocked after MAX_PUBLISH_FAILURES failures', {
-          pageId: args.pageId,
-          asin: payload.asin,
-          count,
-        });
-      }
-    } catch (err) {
-      // failure tracking 自体の失敗は publish の主目的を妨げない (non-fatal)。
-      logger.warn('publish', 'failure count update failed (non-fatal)', {
-        pageId: args.pageId,
-        error: err instanceof Error ? err.message : String(err),
-      });
-    }
   }
 };
 

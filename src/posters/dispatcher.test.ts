@@ -3,27 +3,17 @@ import { anySucceeded, dispatch, type PostResult } from './dispatcher.js';
 import type { Poster, PostInput } from './types.js';
 
 const baseInput: PostInput = {
-  product: {
-    asin: 'B000',
-    title: 't',
-    imageUrl: '',
-    currentPrice: 100,
-    affiliateUrl: 'https://example.com',
-  },
-  reason: 'r',
-  referencePrice: 200,
-  dropPercent: 50,
+  asin: 'B000',
+  text: 'hello',
 };
 
 const okPoster = (name: string): Poster => ({
   name,
-  maxChars: 280,
   post: async () => undefined,
 });
 
 const failPoster = (name: string, msg: string): Poster => ({
   name,
-  maxChars: 280,
   post: async () => {
     throw new Error(msg);
   },

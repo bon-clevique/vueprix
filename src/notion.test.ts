@@ -35,9 +35,7 @@ describe('createDraftPage', () => {
     const id = await createDraftPage({
       asin: 'B0FKLMMS2G',
       title: 'sample',
-      postTextX: 'X text',
-      postTextBluesky: 'Bluesky text',
-      reason: 'reason',
+      postText: 'unified post text',
       amazonUrl: 'https://www.amazon.co.jp/dp/B0FKLMMS2G?tag=t-22',
       currentPrice: 850,
       referencePrice: 1000,
@@ -52,21 +50,20 @@ describe('createDraftPage', () => {
       properties: Record<string, unknown>;
     };
     expect(arg.parent).toEqual({ type: 'data_source_id', data_source_id: 'ds-uuid-123' });
-    // PR-8: Status は status type (旧 select)。書き込み形式 `status: { name }`
     expect(arg.properties.Status).toEqual({ status: { name: 'pending_review' } });
     expect(arg.properties.ASIN).toEqual({ rich_text: [{ type: 'text', text: { content: 'B0FKLMMS2G' } }] });
-    expect(arg.properties['投稿文_X']).toEqual({ rich_text: [{ type: 'text', text: { content: 'X text' } }] });
-    expect(arg.properties['投稿文_Bluesky']).toEqual({ rich_text: [{ type: 'text', text: { content: 'Bluesky text' } }] });
+    expect(arg.properties['投稿文']).toEqual({ rich_text: [{ type: 'text', text: { content: 'unified post text' } }] });
     expect(arg.properties['Amazon URL']).toEqual({ url: 'https://www.amazon.co.jp/dp/B0FKLMMS2G?tag=t-22' });
     expect(arg.properties['通常価格']).toEqual({ number: 1000 });
     expect(arg.properties['セール価格']).toEqual({ number: 850 });
     expect(arg.properties['割引率']).toEqual({ number: 0.15 });
-    // カテゴリは引き続き select type (PR-8 で status 化したのは Status property のみ)
     expect(arg.properties['カテゴリ']).toEqual({ select: { name: 'food' } });
     expect(arg.properties['サクラチェッカーURL']).toEqual({ url: 'https://sakura-checker.jp/search/B0FKLMMS2G/' });
     expect(arg.properties['候補生成日時']).toEqual({ date: { start: '2026-05-09T12:00:00.000Z' } });
-    // PR-8: DryRun property は廃止
-    expect(arg.properties.DryRun).toBeUndefined();
+    // Statutory: 削除済 property は書き込まれない
+    expect(arg.properties['理由']).toBeUndefined();
+    expect(arg.properties['投稿文_X']).toBeUndefined();
+    expect(arg.properties['投稿文_Bluesky']).toBeUndefined();
   });
 
   it('throws when env not configured', async () => {
@@ -77,9 +74,7 @@ describe('createDraftPage', () => {
       createDraftPage({
         asin: 'B0',
         title: 't',
-        postTextX: 'x',
-        postTextBluesky: 'b',
-        reason: 'r',
+        postText: '',
         amazonUrl: null,
         currentPrice: 0,
         referencePrice: 0,
@@ -141,13 +136,10 @@ describe('fetchPageById', () => {
   const buildPage = (status: string, overrides: Record<string, unknown> = {}) => ({
     id: 'page-1',
     properties: {
-      // PR-8: Status は status type に変更 (旧: select)
       Status: { status: { name: status } },
       ASIN: { rich_text: [{ plain_text: 'B0FKL' }] },
       '名前': { title: [{ plain_text: 'sample title' }] },
-      '投稿文_X': { rich_text: [{ plain_text: 'X text' }] },
-      '投稿文_Bluesky': { rich_text: [{ plain_text: 'Bluesky text' }] },
-      '理由': { rich_text: [{ plain_text: 'reason' }] },
+      '投稿文': { rich_text: [{ plain_text: 'unified post text' }] },
       'Amazon URL': { url: 'https://amzn.example/B0FKL' },
       'セール価格': { number: 850 },
       '通常価格': { number: 1000 },
@@ -165,9 +157,7 @@ describe('fetchPageById', () => {
       pageId: 'page-1',
       asin: 'B0FKL',
       title: 'sample title',
-      postTextX: 'X text',
-      postTextBluesky: 'Bluesky text',
-      reason: 'reason',
+      postText: 'unified post text',
       amazonUrl: 'https://amzn.example/B0FKL',
       currentPrice: 850,
       referencePrice: 1000,
@@ -216,13 +206,10 @@ describe('fetchPageById', () => {
     pagesRetrieveMock.mockResolvedValueOnce({
       id: 'page-1',
       properties: {
-        // PR-8: Status は status type
         Status: { status: null },
         ASIN: { rich_text: [{ plain_text: 'B0FKL' }] },
         '名前': { title: [{ plain_text: 'x' }] },
-        '投稿文_X': { rich_text: [{ plain_text: '' }] },
-        '投稿文_Bluesky': { rich_text: [{ plain_text: '' }] },
-        '理由': { rich_text: [{ plain_text: '' }] },
+        '投稿文': { rich_text: [{ plain_text: '' }] },
         'Amazon URL': { url: null },
         'セール価格': { number: 0 },
         '通常価格': { number: 0 },
@@ -253,98 +240,6 @@ describe('fetchPageById', () => {
     pagesRetrieveMock.mockResolvedValueOnce(buildPage('posted'));
     const { fetchPageById } = await import('./notion.js');
     await expect(fetchPageById('page-1')).rejects.toThrow(/posted/);
-  });
-});
-
-describe('incrementFailureCount', () => {
-  const originalKey = process.env.NOTION_API_KEY;
-  const originalDs = process.env.NOTION_VUEPRIX_DATA_SOURCE_ID;
-
-  beforeEach(() => {
-    pagesUpdateMock.mockReset();
-    pagesRetrieveMock.mockReset();
-    process.env.NOTION_API_KEY = 'secret_xxx';
-    process.env.NOTION_VUEPRIX_DATA_SOURCE_ID = 'ds-uuid-123';
-  });
-
-  afterEach(() => {
-    if (originalKey === undefined) delete process.env.NOTION_API_KEY;
-    else process.env.NOTION_API_KEY = originalKey;
-    if (originalDs === undefined) delete process.env.NOTION_VUEPRIX_DATA_SOURCE_ID;
-    else process.env.NOTION_VUEPRIX_DATA_SOURCE_ID = originalDs;
-  });
-
-  it('first failure (0 → 1): returns blocked=false, no Status update, writes count + error message', async () => {
-    pagesRetrieveMock.mockResolvedValueOnce({
-      id: 'page-1',
-      properties: { '投稿失敗回数': { number: 0 } },
-    });
-    pagesUpdateMock.mockResolvedValueOnce({});
-    const { incrementFailureCount } = await import('./notion.js');
-    const result = await incrementFailureCount('page-1', 'x: timeout, bsky: 401');
-    expect(result).toEqual({ count: 1, blocked: false });
-    expect(pagesUpdateMock).toHaveBeenCalledTimes(1);
-    const arg = pagesUpdateMock.mock.calls[0]?.[0] as {
-      page_id: string;
-      properties: Record<string, unknown>;
-    };
-    expect(arg.page_id).toBe('page-1');
-    expect(arg.properties['投稿失敗回数']).toEqual({ number: 1 });
-    expect(arg.properties['最終エラー']).toEqual({
-      rich_text: [{ type: 'text', text: { content: 'x: timeout, bsky: 401' } }],
-    });
-    // blocked=false なので Status update は出力されない
-    expect(arg.properties.Status).toBeUndefined();
-  });
-
-  it('third failure (2 → 3): returns blocked=true, sets Status=blocked, count=3', async () => {
-    pagesRetrieveMock.mockResolvedValueOnce({
-      id: 'page-1',
-      properties: { '投稿失敗回数': { number: 2 } },
-    });
-    pagesUpdateMock.mockResolvedValueOnce({});
-    const { incrementFailureCount } = await import('./notion.js');
-    const result = await incrementFailureCount('page-1', 'x: 500, bsky: 500');
-    expect(result).toEqual({ count: 3, blocked: true });
-    const arg = pagesUpdateMock.mock.calls[0]?.[0] as { properties: Record<string, unknown> };
-    expect(arg.properties['投稿失敗回数']).toEqual({ number: 3 });
-    // PR-8: Status は status type
-    expect(arg.properties.Status).toEqual({ status: { name: 'blocked' } });
-  });
-
-  it('treats missing 投稿失敗回数 property as 0 baseline', async () => {
-    pagesRetrieveMock.mockResolvedValueOnce({ id: 'page-1', properties: {} });
-    pagesUpdateMock.mockResolvedValueOnce({});
-    const { incrementFailureCount } = await import('./notion.js');
-    const result = await incrementFailureCount('page-1', 'first failure ever');
-    expect(result).toEqual({ count: 1, blocked: false });
-  });
-
-  it('truncates very long error messages to NOTION_TEXT_LIMIT (1900) on rich_text content', async () => {
-    pagesRetrieveMock.mockResolvedValueOnce({
-      id: 'page-1',
-      properties: { '投稿失敗回数': { number: 0 } },
-    });
-    pagesUpdateMock.mockResolvedValueOnce({});
-    const longMessage = 'a'.repeat(3000);
-    const { incrementFailureCount } = await import('./notion.js');
-    await incrementFailureCount('page-1', longMessage);
-    const arg = pagesUpdateMock.mock.calls[0]?.[0] as { properties: Record<string, unknown> };
-    const richText = arg.properties['最終エラー'] as {
-      rich_text: Array<{ text: { content: string } }>;
-    };
-    const content = richText.rich_text[0]?.text.content ?? '';
-    expect([...content].length).toBeLessThanOrEqual(1900);
-    expect(content.endsWith('…')).toBe(true);
-  });
-
-  it('falls back to count=0 baseline when retrieve fails (still increments to 1)', async () => {
-    pagesRetrieveMock.mockRejectedValueOnce(new Error('network glitch'));
-    pagesUpdateMock.mockResolvedValueOnce({});
-    const { incrementFailureCount } = await import('./notion.js');
-    const result = await incrementFailureCount('page-1', 'oops');
-    expect(result).toEqual({ count: 1, blocked: false });
-    expect(pagesUpdateMock).toHaveBeenCalledTimes(1);
   });
 });
 

@@ -16,7 +16,6 @@ export interface PostHistoryEntry {
   // 'publish' は Notion DB 経由で publish された場合 (元 source は Notion DB に保存されていないため遡及できない)。
   source: 'deals' | 'fixed' | 'publish';
   category: NotionCategory;
-  reason: string;
   posters: Record<string, boolean>;
 }
 

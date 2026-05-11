@@ -14,7 +14,6 @@ const sampleEntry = (overrides: Partial<PostHistoryEntry> = {}): PostHistoryEntr
   dropPercent: 15,
   source: 'fixed',
   category: 'fixed-list',
-  reason: 'test reason',
   posters: { x: true, bluesky: true },
   ...overrides,
 });
