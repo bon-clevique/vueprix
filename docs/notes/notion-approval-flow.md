@@ -92,8 +92,12 @@ PAT は Cloudflare Worker secrets に格納される。Worker secrets は Notion
 2. **Resource owner**: bon
 3. **Repository access**: Only select repositories → `vueprix` のみ
 4. **Repository permissions**:
-   - Actions: **Read and write**
+   - Contents: **Read and write** ← `repository_dispatch` API の正しい必要権限
    - Metadata: **Read-only** (PAT 必須)
+   - Actions: **Read-only** (任意、`gh run` 系で workflow run 状態を確認したい場合に追加)
+
+> **重要**: GitHub の `repository_dispatch` API は historical reason により response header の `x-accepted-github-permissions: contents=write` で示される通り **Contents 権限**を要求する。GitHub docs UI 上の表記 (「Actions」) は誤解を招くため要注意。2026-05-11 の実機検証で `Actions: Read and write` のみでは 403 になり、`Contents: Read and write` を追加して 204 になることを確認済。
+
 5. **有効期限**: 90 日
 6. ローテーション運用: 期限到来 1 週間前にカレンダー通知 → 新 PAT 発行 → `wrangler secret put GITHUB_PAT` で Worker secret を上書き → 旧 PAT を revoke
 
@@ -104,7 +108,7 @@ PAT は **Cloudflare Worker secrets に格納**される (PR-4 以降)。Notion 
 | 漏洩経路 | 最大被害 | 緩和 |
 |---|---|---|
 | Notion アカウント侵害 (パスワード流出 / セッション hijack) | 攻撃者が `NOTION_SHARED_SECRET` を読める。Worker に repository_dispatch を任意発火させ得る (PAT 本体は抜けない) | (1) `wrangler secret put NOTION_SHARED_SECRET` で 1 コマンド rotate (PAT 再発行不要)。(2) `fetchPageById` が Status=approved でない page を reject。(3) 投稿日時セット済 page も二重ガードで reject。攻撃者が新規 page を Notion 側で作って approve しないと publish できない (= 既に Notion 編集権を持っているのと等価)。GitHub secrets (X / Bluesky tokens) は workflow run logs に出ない限り抜き取れない |
-| Cloudflare アカウント侵害 (Worker secret 直接流出) | PAT が流出 → repository_dispatch 任意発火 + Actions ログ閲覧。secrets は変数展開された後の log にしか出ないが、攻撃者が `echo "$X_API_KEY"` を含む workflow を PR 経由で merge できれば抜ける | (1) PAT は fine-grained, repository limit=`vueprix` only, permission=Actions write / Metadata read のみ。(2) Branch protection で main への direct push 禁止 → workflow 改変は PR レビュー経由のみ。(3) Cloudflare 側に 2FA + hardware key 必須 |
+| Cloudflare アカウント侵害 (Worker secret 直接流出) | PAT が流出 → repository_dispatch 任意発火 + Contents 権限による file 改変 (default branch への push が可能、ただし Branch protection で防御) + Actions ログ閲覧。secrets は変数展開された後の log にしか出ないが、攻撃者が `echo "$X_API_KEY"` を含む workflow を PR 経由で merge できれば抜ける | (1) PAT は fine-grained, repository limit=`vueprix` only, permission=Contents write / Metadata read のみ。(2) Branch protection で main への direct push 禁止 → workflow 改変は PR レビュー経由のみ (Contents:Write でも main への直接 push は protection でブロック)。(3) Cloudflare 側に 2FA + hardware key 必須 |
 
 **運用責務**:
 
