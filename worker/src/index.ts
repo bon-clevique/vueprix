@@ -20,8 +20,9 @@ export interface Env {
 }
 
 // Notion page IDs are UUIDs and may arrive with or without dashes.
+// dashed (8-4-4-4-12) または undashed (32 hex) のいずれか。mixed-dash は拒否。
 const NOTION_PAGE_ID_RE =
-  /^[0-9a-f]{8}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{12}$/i;
+  /^(?:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|[0-9a-f]{32})$/i;
 
 const handler = {
   async fetch(req: Request, env: Env): Promise<Response> {
@@ -41,14 +42,11 @@ const handler = {
       return new Response('Unauthorized', { status: 401 });
     }
 
-    // 3. Parse body and validate the page_id.
-    let body: { page_id?: unknown };
-    try {
-      body = (await req.json()) as { page_id?: unknown };
-    } catch {
-      return new Response('Invalid JSON', { status: 400 });
-    }
-    const pageId = typeof body.page_id === 'string' ? body.page_id : '';
+    // 3. Body 受信 (plain text の page_id 文字列単体)
+    //    Notion automation の Content-Type Header 設定不可制約に対応するため、JSON parse を行わず
+    //    text として受信して trim 後に UUID validation で全文 match を厳格チェックする。
+    //    Cloudflare Workers の req.text() は空 body でも空文字列を返し例外を投げないため try/catch は不要。
+    const pageId = (await req.text()).trim();
     if (!NOTION_PAGE_ID_RE.test(pageId)) {
       return new Response('Invalid page_id', { status: 400 });
     }
