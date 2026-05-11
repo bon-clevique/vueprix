@@ -1,18 +1,13 @@
 import { Client } from '@notionhq/client';
 import type { NotionCategory } from './category.js';
-import {
-  APPROVAL_SLA_HOURS,
-  COOLDOWN_HOURS,
-  EXPIRE_WARN_THRESHOLD,
-  MAX_QUERY_PAGES,
-} from './config.js';
+import { COOLDOWN_HOURS, MAX_QUERY_PAGES } from './config.js';
 import { logger } from './logger.js';
 
 // Notion DB「vueprix 投稿文」schema:
 //   - 名前 (title): 商品名
 //   - 投稿文 (rich_text): X / Bluesky 両用本文 (Notion AI で生成、≤280 chars 制約は運用側で守る)
 //   - ASIN (rich_text)
-//   - Status (status: pending_review/approved/rejected/posted/expired) — PR-8 で select → status type に変更
+//   - Status (status: backlog/in_progress/approved/posted/rejected) — PR-8 で select → status type に変更
 //   - 候補生成日時 (date)
 //   - 投稿日時 (date)
 //   - サクラチェッカーURL (url)
@@ -49,12 +44,23 @@ const requireConfigured = (): string => {
 const buildSakuraCheckerUrl = (asin: string): string =>
   `https://sakura-checker.jp/search/${encodeURIComponent(asin)}/`;
 
+// Status は内部値を snake_case で統一 (URL encode / log 検索容易性のため)。
+// Notion DB の status option の表示 label は自由 (例: in_progress を「in progress」と表示しても可)、
+// ただし API 経由で書き込む / 読み出す内部値は本 const の値と一致させる。
+//
+// 遷移:
+//   backlog (bot 作成直後、投稿文 空)
+//     → in_progress (bon が Notion AI で 投稿文 を作成中、手動遷移)
+//     → approved (文面 + レビュー完了、Notion automation で publish 発火)
+//     → posted (publish 完了)
+//   rejected (投稿しないと判断 + ガイドラインとして残す価値あり、sidetrack)
+//   理由なし不採用は Notion ページごと archive/delete (rejected に置かない)
 export const STATUS = {
-  PENDING_REVIEW: 'pending_review',
+  BACKLOG: 'backlog',
+  IN_PROGRESS: 'in_progress',
   APPROVED: 'approved',
-  REJECTED: 'rejected',
   POSTED: 'posted',
-  EXPIRED: 'expired',
+  REJECTED: 'rejected',
 } as const;
 export type Status = (typeof STATUS)[keyof typeof STATUS];
 
@@ -121,7 +127,7 @@ interface NotionSelectOption {
   name?: string;
 }
 
-// Status=pending_review として candidate を 1 page 作成。page id を返す。
+// Status=backlog として candidate を 1 page 作成。page id を返す。
 // approval workflow の起点。Notion automation が Status=approved に変更すると repository_dispatch が発火する。
 export const createDraftPage = async (draft: DraftCandidate): Promise<string> => {
   const dataSourceId = requireConfigured();
@@ -149,7 +155,8 @@ export const createDraftPage = async (draft: DraftCandidate): Promise<string> =>
       'サクラチェッカーURL': { url: buildSakuraCheckerUrl(draft.asin) },
       '候補生成日時': { date: { start: draft.generatedAt.toISOString() } },
       // Status は Notion 側で「status」type (PR-8 で select から変更)。書き込み形式も `status: { name }`。
-      Status: { status: { name: STATUS.PENDING_REVIEW } },
+      // 初期値は backlog (bon が後で in_progress に手動遷移 → 投稿文 を Notion AI で生成 → approved)。
+      Status: { status: { name: STATUS.BACKLOG } },
       ...(relations.length > 0 ? { '関連ガイドライン': { relation: relations } } : {}),
     },
   });
@@ -222,28 +229,6 @@ const extractDate = (prop: unknown): string | null => {
   return date?.start || null;
 };
 
-// C2 対応: expire と human approval の race を防ぐため retrieve→check→update の 2-step (compare-and-set 相当)。
-// 期限直前 (T0+9h59m) に bon が pending_review → approved に変更した直後、
-// 別 cron の expireOldDrafts query 結果が Notion 側 indexing 遅延でまだ pending_review を返すケースがあり、
-// そのまま expired で上書きすると承認後の publish が止まる silent loss が発生する。
-// retrieve した時点で Status≠pending_review であれば skip する。
-export const updateStatusToExpired = async (pageId: string): Promise<void> => {
-  const client = buildClient();
-  const page = (await client.pages.retrieve({ page_id: pageId })) as unknown as NotionPageRich;
-  const currentStatus = extractStatus(page.properties.Status);
-  if (currentStatus !== STATUS.PENDING_REVIEW) {
-    logger.info('notion', 'expire skipped (status changed during query)', { pageId, currentStatus });
-    return;
-  }
-  await client.pages.update({
-    page_id: pageId,
-    properties: {
-      Status: { status: { name: STATUS.EXPIRED } },
-    },
-  });
-  logger.info('notion', 'status updated to expired', { pageId });
-};
-
 // page から投稿に必要な properties を抽出。Status が approved 以外なら throw (二重投稿防止 hook)。
 export const fetchPageById = async (pageId: string): Promise<DraftPayload> => {
   requireConfigured();
@@ -286,8 +271,11 @@ interface NotionQueryResult {
   next_cursor?: string | null;
 }
 
-// Status ∈ {pending_review, approved, posted} かつ 候補生成日時 > now-COOLDOWN_HOURS の ASIN を Set 集約。
+// Status ∈ {backlog, in_progress, approved, posted} かつ 候補生成日時 > now-COOLDOWN_HOURS の ASIN を Set 集約。
 // 重複下書き作成を防ぐ。posted から COOLDOWN_HOURS 以内なら同 ASIN は再投稿しない。
+// rejected は意図的に除外: 「ガイドラインとして残した不採用 ASIN」が将来再度値下がりした際に
+// 新規 backlog として再候補化されることを許可する (運用意図、COOLDOWN_HOURS も適用しない —
+// 直近 24h 内に rejected にした ASIN が再候補化されても bon が新候補を再評価する)。
 export const queryDuplicateAsins = async (now: Date): Promise<Set<string>> => {
   if (!isConfigured()) {
     logger.info('notion', 'env not configured, returning empty active set');
@@ -300,7 +288,8 @@ export const queryDuplicateAsins = async (now: Date): Promise<Set<string>> => {
     and: [
       {
         or: [
-          { property: 'Status', status: { equals: STATUS.PENDING_REVIEW } },
+          { property: 'Status', status: { equals: STATUS.BACKLOG } },
+          { property: 'Status', status: { equals: STATUS.IN_PROGRESS } },
           { property: 'Status', status: { equals: STATUS.APPROVED } },
           { property: 'Status', status: { equals: STATUS.POSTED } },
         ],
@@ -342,74 +331,5 @@ export const queryDuplicateAsins = async (now: Date): Promise<Set<string>> => {
   }
   logger.info('notion', 'duplicate asins queried', { count: asins.size });
   return asins;
-};
-
-// Status=pending_review かつ 候補生成日時 < now-slaHours を query → updateStatusToExpired を逐次呼び。
-// 件数=20件以下想定 (1日20件 × 数日 × 失効率)。
-export const expireOldDrafts = async (
-  now: Date,
-  slaHours: number = APPROVAL_SLA_HOURS,
-): Promise<number> => {
-  if (!isConfigured()) {
-    logger.info('notion', 'env not configured, skipping expire');
-    return 0;
-  }
-  const dataSourceId = process.env.NOTION_VUEPRIX_DATA_SOURCE_ID as string;
-  const client = buildClient();
-  const cutoff = new Date(now.getTime() - slaHours * 60 * 60 * 1000).toISOString();
-  const filter = {
-    and: [
-      { property: 'Status', status: { equals: STATUS.PENDING_REVIEW } },
-      { property: '候補生成日時', date: { before: cutoff } },
-    ],
-  };
-
-  const targetIds: string[] = [];
-  let cursor: string | undefined;
-  let reachedCap = true;
-  for (let i = 0; i < MAX_QUERY_PAGES; i += 1) {
-    const res = (await client.dataSources.query({
-      data_source_id: dataSourceId,
-      filter,
-      page_size: 100,
-      ...(cursor ? { start_cursor: cursor } : {}),
-    })) as unknown as NotionQueryResult;
-    for (const page of res.results) {
-      targetIds.push(page.id);
-    }
-    if (!res.has_more || !res.next_cursor) {
-      reachedCap = false;
-      break;
-    }
-    cursor = res.next_cursor;
-  }
-  if (reachedCap) {
-    logger.warn('notion', 'page cap reached', {
-      fn: 'expireOldDrafts',
-      maxPages: MAX_QUERY_PAGES,
-      collected: targetIds.length,
-    });
-  }
-
-  for (const id of targetIds) {
-    try {
-      await updateStatusToExpired(id);
-    } catch (err) {
-      logger.error('notion', 'expire failed (continuing)', {
-        pageId: id,
-        type: err instanceof Error ? err.constructor.name : typeof err,
-      });
-    }
-  }
-  // 件数が EXPIRE_WARN_THRESHOLD を超えたら warn (運用異常 — bon の承認停滞 / 候補生成過多)。
-  // Slack 通知連携は別 backlog 扱い。本箇所は warn ログのみ。
-  if (targetIds.length >= EXPIRE_WARN_THRESHOLD) {
-    logger.warn('notion', 'high expire volume', {
-      count: targetIds.length,
-      threshold: EXPIRE_WARN_THRESHOLD,
-    });
-  }
-  logger.info('notion', 'expired old drafts', { count: targetIds.length });
-  return targetIds.length;
 };
 

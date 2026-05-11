@@ -29,7 +29,7 @@ describe('createDraftPage', () => {
     else process.env.NOTION_VUEPRIX_DATA_SOURCE_ID = originalDs;
   });
 
-  it('creates page with Status=pending_review and returns page id', async () => {
+  it('creates page with Status=backlog and returns page id', async () => {
     pagesCreateMock.mockResolvedValueOnce({ id: 'page-abc' });
     const { createDraftPage } = await import('./notion.js');
     const id = await createDraftPage({
@@ -50,7 +50,7 @@ describe('createDraftPage', () => {
       properties: Record<string, unknown>;
     };
     expect(arg.parent).toEqual({ type: 'data_source_id', data_source_id: 'ds-uuid-123' });
-    expect(arg.properties.Status).toEqual({ status: { name: 'pending_review' } });
+    expect(arg.properties.Status).toEqual({ status: { name: 'backlog' } });
     expect(arg.properties.ASIN).toEqual({ rich_text: [{ type: 'text', text: { content: 'B0FKLMMS2G' } }] });
     expect(arg.properties['投稿文']).toEqual({ rich_text: [{ type: 'text', text: { content: 'unified post text' } }] });
     expect(arg.properties['Amazon URL']).toEqual({ url: 'https://www.amazon.co.jp/dp/B0FKLMMS2G?tag=t-22' });
@@ -230,10 +230,16 @@ describe('fetchPageById', () => {
     expect(payload.category).toBe('fixed-list');
   });
 
-  it('throws when Status is not approved (e.g. pending_review)', async () => {
-    pagesRetrieveMock.mockResolvedValueOnce(buildPage('pending_review'));
+  it('throws when Status is not approved (e.g. backlog)', async () => {
+    pagesRetrieveMock.mockResolvedValueOnce(buildPage('backlog'));
     const { fetchPageById } = await import('./notion.js');
-    await expect(fetchPageById('page-1')).rejects.toThrow(/pending_review/);
+    await expect(fetchPageById('page-1')).rejects.toThrow(/backlog/);
+  });
+
+  it('throws when Status is in_progress (Notion AI 作業中)', async () => {
+    pagesRetrieveMock.mockResolvedValueOnce(buildPage('in_progress'));
+    const { fetchPageById } = await import('./notion.js');
+    await expect(fetchPageById('page-1')).rejects.toThrow(/in_progress/);
   });
 
   it('throws when Status=posted (二重投稿防止 hook)', async () => {
@@ -269,7 +275,7 @@ describe('queryDuplicateAsins', () => {
     expect(dataSourcesQueryMock).not.toHaveBeenCalled();
   });
 
-  it('queries with Status filter (pending_review/approved/posted) and returns asin set', async () => {
+  it('queries with Status filter (backlog/in_progress/approved/posted) and returns asin set', async () => {
     dataSourcesQueryMock.mockResolvedValueOnce({
       results: [
         { id: 'p1', properties: { ASIN: { rich_text: [{ plain_text: 'B001' }] } } },
@@ -284,9 +290,10 @@ describe('queryDuplicateAsins', () => {
     expect(arg.data_source_id).toBe('ds-uuid-123');
     const filter = arg.filter as { and: Array<{ or?: Array<{ property: string; status?: { equals: string } }>; property?: string; date?: { on_or_after: string } }> };
     expect(filter.and).toHaveLength(2);
-    // PR-8: Status filter は status: { equals } 形式
+    // 4 値で重複防止 (rejected は意図的に除外 → 再候補化を許可)
     expect(filter.and[0]?.or).toEqual([
-      { property: 'Status', status: { equals: 'pending_review' } },
+      { property: 'Status', status: { equals: 'backlog' } },
+      { property: 'Status', status: { equals: 'in_progress' } },
       { property: 'Status', status: { equals: 'approved' } },
       { property: 'Status', status: { equals: 'posted' } },
     ]);
@@ -331,150 +338,3 @@ describe('queryDuplicateAsins', () => {
   });
 });
 
-describe('expireOldDrafts', () => {
-  const originalKey = process.env.NOTION_API_KEY;
-  const originalDs = process.env.NOTION_VUEPRIX_DATA_SOURCE_ID;
-
-  beforeEach(() => {
-    dataSourcesQueryMock.mockReset();
-    pagesUpdateMock.mockReset();
-    pagesRetrieveMock.mockReset();
-    process.env.NOTION_API_KEY = 'secret_xxx';
-    process.env.NOTION_VUEPRIX_DATA_SOURCE_ID = 'ds-uuid-123';
-  });
-
-  afterEach(() => {
-    if (originalKey === undefined) delete process.env.NOTION_API_KEY;
-    else process.env.NOTION_API_KEY = originalKey;
-    if (originalDs === undefined) delete process.env.NOTION_VUEPRIX_DATA_SOURCE_ID;
-    else process.env.NOTION_VUEPRIX_DATA_SOURCE_ID = originalDs;
-  });
-
-  const buildPendingReviewPage = (id: string) => ({
-    id,
-    // PR-8: Status は status type
-    properties: { Status: { status: { name: 'pending_review' } } },
-  });
-
-  it('queries pending_review older than slaHours and updates each to expired', async () => {
-    const now = new Date('2026-05-09T12:00:00.000Z');
-    dataSourcesQueryMock.mockResolvedValueOnce({
-      results: [{ id: 'p-old-1', properties: {} }, { id: 'p-old-2', properties: {} }],
-      has_more: false,
-    });
-    // C2: updateStatusToExpired は retrieve→check→update の 2-step
-    pagesRetrieveMock.mockResolvedValue(buildPendingReviewPage('p-old-1'));
-    pagesUpdateMock.mockResolvedValue({});
-    const { expireOldDrafts } = await import('./notion.js');
-    const count = await expireOldDrafts(now, 10);
-    expect(count).toBe(2);
-    expect(pagesUpdateMock).toHaveBeenCalledTimes(2);
-    expect(pagesRetrieveMock).toHaveBeenCalledTimes(2);
-    const arg = dataSourcesQueryMock.mock.calls[0]?.[0] as { filter: { and: Array<{ property: string; status?: { equals: string }; date?: { before: string } }> } };
-    // PR-8: Status filter は status: { equals } 形式
-    expect(arg.filter.and[0]?.status).toEqual({ equals: 'pending_review' });
-    expect(arg.filter.and[1]?.date?.before).toBe('2026-05-09T02:00:00.000Z');
-    const updateArg = pagesUpdateMock.mock.calls[0]?.[0] as { properties: Record<string, unknown> };
-    expect(updateArg.properties.Status).toEqual({ status: { name: 'expired' } });
-  });
-
-  it('returns 0 when no candidates match', async () => {
-    dataSourcesQueryMock.mockResolvedValueOnce({ results: [], has_more: false });
-    const { expireOldDrafts } = await import('./notion.js');
-    const count = await expireOldDrafts(new Date());
-    expect(count).toBe(0);
-    expect(pagesUpdateMock).not.toHaveBeenCalled();
-  });
-
-  it('skips update when status changed to approved between query and update (C2 race fix)', async () => {
-    dataSourcesQueryMock.mockResolvedValueOnce({
-      results: [{ id: 'p-1', properties: {} }],
-      has_more: false,
-    });
-    // human が直前に approved に変えたケースを想定 — retrieve 時点では approved
-    pagesRetrieveMock.mockResolvedValueOnce({
-      id: 'p-1',
-      // PR-8: Status は status type
-      properties: { Status: { status: { name: 'approved' } } },
-    });
-    const { expireOldDrafts } = await import('./notion.js');
-    const count = await expireOldDrafts(new Date());
-    expect(count).toBe(1); // 検出件数は 1
-    expect(pagesRetrieveMock).toHaveBeenCalledTimes(1);
-    // しかし update は呼ばれない (silent loss 防止)
-    expect(pagesUpdateMock).not.toHaveBeenCalled();
-  });
-
-  it('uses APPROVAL_SLA_HOURS as default slaHours', async () => {
-    const now = new Date('2026-05-09T12:00:00.000Z');
-    dataSourcesQueryMock.mockResolvedValueOnce({ results: [], has_more: false });
-    const { expireOldDrafts } = await import('./notion.js');
-    await expireOldDrafts(now); // slaHours 未指定 → APPROVAL_SLA_HOURS=10 を使う想定
-    const arg = dataSourcesQueryMock.mock.calls[0]?.[0] as {
-      filter: { and: Array<{ date?: { before: string } }> };
-    };
-    // 12:00 - 10h = 02:00
-    expect(arg.filter.and[1]?.date?.before).toBe('2026-05-09T02:00:00.000Z');
-  });
-
-  it('warns when expire count >= EXPIRE_WARN_THRESHOLD (5)', async () => {
-    // 5 件 expire → warn 発火
-    dataSourcesQueryMock.mockResolvedValueOnce({
-      results: Array.from({ length: 5 }, (_, i) => ({ id: `p-${i}`, properties: {} })),
-      has_more: false,
-    });
-    pagesRetrieveMock.mockResolvedValue({
-      id: 'p',
-      properties: { Status: { status: { name: 'pending_review' } } },
-    });
-    pagesUpdateMock.mockResolvedValue({});
-    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
-    const { expireOldDrafts } = await import('./notion.js');
-    const count = await expireOldDrafts(new Date());
-    expect(count).toBe(5);
-    const lines = logSpy.mock.calls.map((c) => String(c[0]));
-    const warnLine = lines.find((l) => l.includes('"high expire volume"') && l.includes('"count":5'));
-    expect(warnLine).toBeDefined();
-    logSpy.mockRestore();
-  });
-
-  it('does not warn when expire count < EXPIRE_WARN_THRESHOLD', async () => {
-    // 4 件 expire → warn 出ない
-    dataSourcesQueryMock.mockResolvedValueOnce({
-      results: Array.from({ length: 4 }, (_, i) => ({ id: `p-${i}`, properties: {} })),
-      has_more: false,
-    });
-    pagesRetrieveMock.mockResolvedValue({
-      id: 'p',
-      properties: { Status: { status: { name: 'pending_review' } } },
-    });
-    pagesUpdateMock.mockResolvedValue({});
-    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
-    const { expireOldDrafts } = await import('./notion.js');
-    await expireOldDrafts(new Date());
-    const lines = logSpy.mock.calls.map((c) => String(c[0]));
-    expect(lines.some((l) => l.includes('"high expire volume"'))).toBe(false);
-    logSpy.mockRestore();
-  });
-
-  it('warns when MAX_QUERY_PAGES cap is reached', async () => {
-    dataSourcesQueryMock.mockResolvedValue({
-      results: [{ id: 'p', properties: {} }],
-      has_more: true,
-      next_cursor: 'cursor',
-    });
-    pagesRetrieveMock.mockResolvedValue({
-      id: 'p',
-      properties: { Status: { status: { name: 'pending_review' } } },
-    });
-    pagesUpdateMock.mockResolvedValue({});
-    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
-    const { expireOldDrafts } = await import('./notion.js');
-    await expireOldDrafts(new Date());
-    expect(dataSourcesQueryMock).toHaveBeenCalledTimes(10);
-    const lines = logSpy.mock.calls.map((c) => String(c[0]));
-    const warnLine = lines.find((l) => l.includes('"page cap reached"') && l.includes('expireOldDrafts'));
-    expect(warnLine).toBeDefined();
-    logSpy.mockRestore();
-  });
-});

@@ -104,7 +104,7 @@ describe('publish entrypoint', () => {
 
   it('returns early without throwing when page is not approved', async () => {
     pagesRetrieveMock.mockResolvedValueOnce(
-      buildApprovedPage({ Status: { status: { name: 'pending_review' } } }),
+      buildApprovedPage({ Status: { status: { name: 'backlog' } } }),
     );
     const { main } = await import('./publish.js');
     await expect(
