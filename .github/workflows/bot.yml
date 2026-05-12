@@ -46,6 +46,7 @@ jobs:
           PAAPI_REGION: us-west-2
           NOTION_API_KEY: ${{ secrets.NOTION_API_KEY }}
           NOTION_VUEPRIX_DATA_SOURCE_ID: ${{ secrets.NOTION_VUEPRIX_DATA_SOURCE_ID }}
+          NOTION_VUEPRIX_RUN_LOG_DATA_SOURCE_ID: ${{ secrets.NOTION_VUEPRIX_RUN_LOG_DATA_SOURCE_ID }}
           LOG_LEVEL: info
         run: npm run draft
 

@@ -121,10 +121,21 @@ export interface DraftPayload {
   postedAt: string | null;
 }
 
+// Notion API: timeout/retry option を明示的に設定する。
+// - timeoutMs: default 60s だと cron サイクル (2h) を 1 失敗で丸ごと喪失する事象 (2026-05-12 09:58 JST 実例) があり、
+//   30s に短縮して 1 attempt の失敗を早く検知 → retry に回す。
+// - retry: default は maxRetries=2 だが、本 repo では timeout/5xx での fatal exit を防ぐため 3 attempts に上げる
+//   (1s → 2s → 4s の指数バックオフ、合計遅延 ~7s)。
 const buildClient = (): Client =>
   new Client({
     auth: process.env.NOTION_API_KEY,
     notionVersion: '2026-03-11',
+    timeoutMs: 30_000,
+    retry: {
+      maxRetries: 3,
+      initialRetryDelayMs: 1_000,
+      maxRetryDelayMs: 8_000,
+    },
   });
 
 interface NotionRichText {
