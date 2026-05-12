@@ -10,6 +10,7 @@ export const FIXED_ASINS: readonly string[] = [
   "B01H09CWNG", // カリタ ウェーブドリッパー WDS-155 ステンレス製 燕職人手作り 1~2人用
   "B0B5GP4S36", // コマンダンテ アメリカンチェリー C40 MK4 ニトロブレード コーヒーグラインダー [並行輸入品]
   "B0BNHTX3YD",
+  "B0CH9LZRJP",
 ];
 
 // Amazon.co.jp = Keepa domain 5
