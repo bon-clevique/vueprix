@@ -82,10 +82,18 @@ export const parseDeal = (d: KeepaDealsItem): Deal | null => {
   return { asin: d.asin, title, currentPrice: current, referencePrice: avg, dropPercent };
 };
 
+// 戻り値に tokensLeft を含める理由: draft.ts → run-log.ts で run 終了時の Keepa 残トークンを
+// Notion run-log DB に記録するため。category 別 log line には既に tokensLeft が出ているが、
+// caller 側に値を渡すには戻り値経由の方が確実 (logger 側を parse するのは脆い)。
+export interface GetDealsResult {
+  deals: Deal[];
+  tokensLeft: number | null;
+}
+
 export const getDeals = async (
   categoryId: number,
   sortType: number = KEEPA_DEAL_SORT_TYPE,
-): Promise<Deal[]> => {
+): Promise<GetDealsResult> => {
   // Keepa Browsing Deals API: POST /deal with DealRequest JSON body.
   // Reference: keepacom/api_backend Request.java#getDealsRequest
   // (r.path = "deal", r.postData = gson.toJson(dealRequest))
@@ -112,9 +120,10 @@ export const getDeals = async (
     count: res.data.deals?.dr?.length ?? 0,
   });
   const items = res.data.deals?.dr ?? [];
-  return items
+  const deals = items
     .map(parseDeal)
     .filter((d): d is Deal => d !== null);
+  return { deals, tokensLeft: res.data.tokensLeft ?? null };
 };
 
 export const checkAsin = async (asin: string): Promise<PriceHistory | null> => {

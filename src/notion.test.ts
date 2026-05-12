@@ -6,8 +6,14 @@ const pagesUpdateMock = vi.fn();
 const pagesRetrieveMock = vi.fn();
 const dataSourcesQueryMock = vi.fn();
 const blocksAppendMock = vi.fn();
+// Client constructor 引数を観測するための spy。retry / timeoutMs option が
+// notion.ts の buildClient() で正しく渡っていることを assert する。
+const clientCtorSpy = vi.fn();
 vi.mock('@notionhq/client', () => ({
   Client: class MockClient {
+    constructor(options?: unknown) {
+      clientCtorSpy(options);
+    }
     pages = { create: pagesCreateMock, update: pagesUpdateMock, retrieve: pagesRetrieveMock };
     dataSources = { query: dataSourcesQueryMock };
     blocks = { children: { append: blocksAppendMock } };
@@ -20,6 +26,7 @@ describe('createDraftPage', () => {
 
   beforeEach(() => {
     pagesCreateMock.mockReset();
+    clientCtorSpy.mockReset();
     process.env.NOTION_API_KEY = 'secret_xxx';
     process.env.NOTION_VUEPRIX_DATA_SOURCE_ID = 'ds-uuid-123';
   });
@@ -47,6 +54,18 @@ describe('createDraftPage', () => {
     });
     expect(id).toBe('page-abc');
     expect(pagesCreateMock).toHaveBeenCalledTimes(1);
+    // buildClient() が timeoutMs / retry option を Client に渡していることを assert。
+    // 9:58 JST 2026-05-12 の Notion API request_timeout を retry でしのぐための regression。
+    const ctorArg = clientCtorSpy.mock.calls[0]?.[0] as {
+      timeoutMs?: number;
+      retry?: { maxRetries?: number };
+    };
+    expect(ctorArg.timeoutMs).toBe(30_000);
+    expect(ctorArg.retry).toEqual({
+      maxRetries: 3,
+      initialRetryDelayMs: 1_000,
+      maxRetryDelayMs: 8_000,
+    });
     const arg = pagesCreateMock.mock.calls[0]?.[0] as {
       parent: unknown;
       properties: Record<string, unknown>;

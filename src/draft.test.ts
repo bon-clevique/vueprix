@@ -7,6 +7,7 @@ const getItemsMock = vi.fn();
 const createDraftPageMock = vi.fn();
 const queryDuplicateAsinsMock = vi.fn();
 const loadBlocklistMock = vi.fn();
+const appendRunLogMock = vi.fn();
 
 vi.mock('./keepa.js', () => ({
   getDeals: (...args: unknown[]) => getDealsMock(...args),
@@ -26,8 +27,17 @@ vi.mock('./blocklist.js', () => ({
   loadBlocklist: (...args: unknown[]) => loadBlocklistMock(...args),
 }));
 
+vi.mock('./run-log.js', () => ({
+  appendRunLog: (...args: unknown[]) => appendRunLogMock(...args),
+}));
+
 // FIXED_ASINS は config.ts に const で定義されているので、mockKeepa の checkAsin に
 // "全 ASIN について null を返す" 振る舞いを default 設定し、fixed candidates が混入しないようにする。
+// getDeals は GetDealsResult ({ deals, tokensLeft }) を返す。
+// test 側では deals 配列だけ渡すケースが大半なので、tokensLeft default は null。
+// tokensLeft の値を明示的に observe したい test は dealsResult([...], 42) のように明示する。
+const dealsResult = (deals: unknown[], tokensLeft: number | null = null) => ({ deals, tokensLeft });
+
 const resetAllMocks = () => {
   getDealsMock.mockReset();
   checkAsinMock.mockReset();
@@ -35,14 +45,17 @@ const resetAllMocks = () => {
   createDraftPageMock.mockReset();
   queryDuplicateAsinsMock.mockReset();
   loadBlocklistMock.mockReset();
+  appendRunLogMock.mockReset();
 
-  // sane defaults
-  getDealsMock.mockResolvedValue([]);
+  // sane defaults: tokensLeft は null にして「設定無し」を示す
+  // (各 test が個別カテゴリで mockImplementation すれば、その値が lastTokensLeft に反映される)
+  getDealsMock.mockResolvedValue(dealsResult([], null));
   checkAsinMock.mockResolvedValue(null);
   getItemsMock.mockResolvedValue([]);
   createDraftPageMock.mockResolvedValue('page-mock-id');
   queryDuplicateAsinsMock.mockResolvedValue(new Set<string>());
   loadBlocklistMock.mockResolvedValue(new Set<string>());
+  appendRunLogMock.mockResolvedValue(undefined);
 };
 
 // title はデフォルトで food whitelist (`国産|日本産|日本製`) を通すようにしている。
@@ -181,12 +194,12 @@ describe('draft.main integration', () => {
     // title は food whitelist を通すよう「国産」を含める。
     getDealsMock.mockImplementation((categoryId: number) => {
       if (categoryId === 57239051) {
-        return Promise.resolve([
+        return Promise.resolve(dealsResult([
           buildDeal({ asin: 'B000BLOCK', title: '国産 ブロック対象' }),
           buildDeal({ asin: 'B000PASS', title: '国産 通過対象' }),
-        ]);
+        ]));
       }
-      return Promise.resolve([]);
+      return Promise.resolve(dealsResult([]));
     });
     loadBlocklistMock.mockResolvedValue(new Set(['B000BLOCK']));
 
@@ -202,12 +215,12 @@ describe('draft.main integration', () => {
   it('drops candidates whose ASIN is already active in Notion (duplicate)', async () => {
     getDealsMock.mockImplementation((categoryId: number) => {
       if (categoryId === 57239051) {
-        return Promise.resolve([
+        return Promise.resolve(dealsResult([
           buildDeal({ asin: 'B000ACTIVE', title: '国産 重複対象' }),
           buildDeal({ asin: 'B000NEW', title: '国産 新規対象' }),
-        ]);
+        ]));
       }
-      return Promise.resolve([]);
+      return Promise.resolve(dealsResult([]));
     });
     queryDuplicateAsinsMock.mockResolvedValue(new Set(['B000ACTIVE']));
 
@@ -224,12 +237,14 @@ describe('draft.main integration', () => {
     getDealsMock.mockImplementation((categoryId: number) => {
       if (categoryId === 57239051) {
         return Promise.resolve(
-          Array.from({ length: 15 }, (_, i) =>
-            buildDeal({ asin: `B${String(i).padStart(3, '0')}` }),
+          dealsResult(
+            Array.from({ length: 15 }, (_, i) =>
+              buildDeal({ asin: `B${String(i).padStart(3, '0')}` }),
+            ),
           ),
         );
       }
-      return Promise.resolve([]);
+      return Promise.resolve(dealsResult([]));
     });
 
     const { main } = await import('./draft.js');
@@ -241,9 +256,9 @@ describe('draft.main integration', () => {
   it('falls back to Keepa-only when PA-API getItems throws', async () => {
     getDealsMock.mockImplementation((categoryId: number) => {
       if (categoryId === 57239051) {
-        return Promise.resolve([buildDeal({ asin: 'B000FALL', title: '国産 フォールバック商品' })]);
+        return Promise.resolve(dealsResult([buildDeal({ asin: 'B000FALL', title: '国産 フォールバック商品' })]));
       }
-      return Promise.resolve([]);
+      return Promise.resolve(dealsResult([]));
     });
     getItemsMock.mockRejectedValueOnce(new Error('PA-API down'));
 
@@ -261,9 +276,9 @@ describe('draft.main integration', () => {
   it('uses PA-API product info when available (preferred over Keepa fallback)', async () => {
     getDealsMock.mockImplementation((categoryId: number) => {
       if (categoryId === 57239051) {
-        return Promise.resolve([buildDeal({ asin: 'B000PA', title: '国産 Keepa Title' })]);
+        return Promise.resolve(dealsResult([buildDeal({ asin: 'B000PA', title: '国産 Keepa Title' })]));
       }
-      return Promise.resolve([]);
+      return Promise.resolve(dealsResult([]));
     });
     getItemsMock.mockResolvedValue([
       {
@@ -287,9 +302,9 @@ describe('draft.main integration', () => {
     // 全 deal を blocklist で排除すると targets=0 → createDraftPage 呼ばれず
     getDealsMock.mockImplementation((categoryId: number) => {
       if (categoryId === 57239051) {
-        return Promise.resolve([buildDeal({ asin: 'B000ONLY' })]);
+        return Promise.resolve(dealsResult([buildDeal({ asin: 'B000ONLY' })]));
       }
-      return Promise.resolve([]);
+      return Promise.resolve(dealsResult([]));
     });
     loadBlocklistMock.mockResolvedValue(new Set(['B000ONLY']));
 
@@ -306,12 +321,12 @@ describe('draft.main integration', () => {
     // title はフィルタで落ちる。
     getDealsMock.mockImplementation((categoryId: number) => {
       if (categoryId === 57239051) {
-        return Promise.resolve([
+        return Promise.resolve(dealsResult([
           buildDeal({ asin: 'B000NOWL', title: '輸入トマト缶 400g x 24' }),
           buildDeal({ asin: 'B000PASS', title: '国産レモン果汁 500ml' }),
-        ]);
+        ]));
       }
-      return Promise.resolve([]);
+      return Promise.resolve(dealsResult([]));
     });
 
     const { main } = await import('./draft.js');
@@ -328,12 +343,14 @@ describe('draft.main integration', () => {
     getDealsMock.mockImplementation((categoryId: number) => {
       if (categoryId === 57239051) {
         return Promise.resolve(
-          Array.from({ length: 8 }, (_, i) =>
-            buildDeal({ asin: `B${String(i).padStart(3, '0')}`, title: '国産 食品' }),
+          dealsResult(
+            Array.from({ length: 8 }, (_, i) =>
+              buildDeal({ asin: `B${String(i).padStart(3, '0')}`, title: '国産 食品' }),
+            ),
           ),
         );
       }
-      return Promise.resolve([]);
+      return Promise.resolve(dealsResult([]));
     });
     // checkAsin (FIXED_ASINS の各 ASIN について) — 1 件だけ history を返す
     checkAsinMock.mockImplementation((asin: string) => {
@@ -361,9 +378,9 @@ describe('draft.main integration', () => {
   it('creates draft with empty postText (Notion AI 運用)', async () => {
     getDealsMock.mockImplementation((categoryId: number) => {
       if (categoryId === 57239051) {
-        return Promise.resolve([buildDeal({ asin: 'B000EMPTY', title: '国産 空文 Test' })]);
+        return Promise.resolve(dealsResult([buildDeal({ asin: 'B000EMPTY', title: '国産 空文 Test' })]));
       }
-      return Promise.resolve([]);
+      return Promise.resolve(dealsResult([]));
     });
 
     const { main } = await import('./draft.js');
@@ -372,5 +389,105 @@ describe('draft.main integration', () => {
     expect(createDraftPageMock).toHaveBeenCalledTimes(1);
     const draftArg = createDraftPageMock.mock.calls[0]?.[0] as { postText: string };
     expect(draftArg.postText).toBe('');
+  });
+});
+
+describe('draft.main run-log integration', () => {
+  const originalEnv = { ...process.env };
+
+  beforeEach(() => {
+    resetAllMocks();
+    process.env.PAAPI_PARTNER_TAG = 'test-tag-22';
+  });
+
+  afterEach(() => {
+    for (const k of Object.keys(process.env)) {
+      if (!(k in originalEnv)) delete process.env[k];
+    }
+    Object.assign(process.env, originalEnv);
+    vi.restoreAllMocks();
+  });
+
+  it('appends run-log with status=success when run completes normally', async () => {
+    getDealsMock.mockImplementation((categoryId: number) => {
+      if (categoryId === 57239051) {
+        return Promise.resolve(
+          dealsResult([buildDeal({ asin: 'B000OK', title: '国産 OK' })], 42),
+        );
+      }
+      return Promise.resolve(dealsResult([]));
+    });
+
+    const { main } = await import('./draft.js');
+    await main();
+
+    expect(appendRunLogMock).toHaveBeenCalledTimes(1);
+    const arg = appendRunLogMock.mock.calls[0]?.[0] as {
+      status: string;
+      tokensLeft: number | null;
+      draftsCreated: number;
+      targetsSelected: number;
+      errorMessage: string | null;
+    };
+    expect(arg.status).toBe('success');
+    expect(arg.tokensLeft).toBe(42);
+    expect(arg.draftsCreated).toBe(1);
+    expect(arg.targetsSelected).toBe(1);
+    expect(arg.errorMessage).toBeNull();
+  });
+
+  it('appends run-log with status=failure when queryDuplicateAsins throws', async () => {
+    queryDuplicateAsinsMock.mockRejectedValueOnce(
+      new Error('Request to Notion API has timed out'),
+    );
+    // process.exit(1) を吸収 — main() catch 末尾で呼ばれる
+    const exitSpy = vi.spyOn(process, 'exit').mockImplementation(((_code?: number) => {
+      throw new Error('__exit__');
+    }) as never);
+
+    const { main } = await import('./draft.js');
+    await expect(main()).rejects.toThrow('__exit__');
+
+    expect(appendRunLogMock).toHaveBeenCalledTimes(1);
+    const arg = appendRunLogMock.mock.calls[0]?.[0] as {
+      status: string;
+      errorMessage: string | null;
+      draftsCreated: number;
+    };
+    expect(arg.status).toBe('failure');
+    expect(arg.errorMessage).toBe('Request to Notion API has timed out');
+    expect(arg.draftsCreated).toBe(0);
+    expect(exitSpy).toHaveBeenCalledWith(1);
+  });
+
+  it('appends run-log with status=partial when some createDraftPage fails', async () => {
+    getDealsMock.mockImplementation((categoryId: number) => {
+      if (categoryId === 57239051) {
+        return Promise.resolve(
+          dealsResult([
+            buildDeal({ asin: 'B000A', title: '国産 A' }),
+            buildDeal({ asin: 'B000B', title: '国産 B' }),
+          ]),
+        );
+      }
+      return Promise.resolve(dealsResult([]));
+    });
+    // 1 件目は成功、2 件目は throw
+    createDraftPageMock
+      .mockResolvedValueOnce('page-1')
+      .mockRejectedValueOnce(new Error('Notion 5xx'));
+
+    const { main } = await import('./draft.js');
+    await main();
+
+    expect(appendRunLogMock).toHaveBeenCalledTimes(1);
+    const arg = appendRunLogMock.mock.calls[0]?.[0] as {
+      status: string;
+      draftsCreated: number;
+      targetsSelected: number;
+    };
+    expect(arg.status).toBe('partial');
+    expect(arg.draftsCreated).toBe(1);
+    expect(arg.targetsSelected).toBe(2);
   });
 });
