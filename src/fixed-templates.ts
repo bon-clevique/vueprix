@@ -10,6 +10,7 @@ const POST_TEXT_MAX_CHARS = 280;
 //   - ASIN (title)
 //   - 商品名 (rich_text)
 //   - 投稿文 (rich_text): 値下げ前後の固定の紹介文。空文字 / 未設定の ASIN は投稿対象外
+//   - 参考定価 (number): 手動入力の希望小売価格 / 旧定価。PA-API SavingBasis 不在時の reference 候補
 //   - Amazon URL (url)
 //   - 登録日 (date)
 //
@@ -29,6 +30,13 @@ interface NotionDataSourceQueryResult {
   next_cursor?: string | null;
 }
 
+// 1 件の固定ASIN が保持する情報。description は必須 (空なら fetch 段階で skip)、
+// manualReferencePrice は optional (未設定/0/負値の場合 undefined)。
+export interface FixedListing {
+  description: string;
+  manualReferencePrice?: number;
+}
+
 const extractTitleText = (prop: unknown): string => {
   if (!prop || typeof prop !== 'object') return '';
   const title = (prop as { title?: NotionRichTextItem[] }).title;
@@ -43,15 +51,24 @@ const extractRichText = (prop: unknown): string => {
   return rt.map((t) => t.plain_text ?? '').join('');
 };
 
+const extractNumber = (prop: unknown): number | null => {
+  if (!prop || typeof prop !== 'object') return null;
+  const n = (prop as { number?: number | null }).number;
+  // typeof NaN === 'number' を通さないよう Number.isFinite で defense-in-depth する。
+  // Notion API は number column に NaN を返さない想定だが、想定外入力で投稿文に NaN が混入する事故を防ぐ。
+  return typeof n === 'number' && Number.isFinite(n) ? n : null;
+};
+
 const isConfigured = (): boolean =>
   Boolean(process.env.NOTION_API_KEY) && Boolean(process.env.NOTION_FIXED_ASIN_DATA_SOURCE_ID);
 
-// Notion 固定ASIN DB を全件クエリして ASIN → 投稿文 (紹介部分のみ) の Map を返す。
+// Notion 固定ASIN DB を全件クエリして ASIN → FixedListing の Map を返す。
 // 投稿文 が空文字 / 未設定の行は Map に含めない (呼び出し側で「Map に無い ASIN」を skip する)。
+// 参考定価 が未設定 / 0 / 負値の場合は manualReferencePrice: undefined として保持する。
 //
 // 環境変数未設定時は空 Map を返す (本 fn 失敗で run 全体を止めない fail-safe)。
-export const fetchFixedDescriptions = async (): Promise<Map<string, string>> => {
-  const map = new Map<string, string>();
+export const fetchFixedListings = async (): Promise<Map<string, FixedListing>> => {
+  const map = new Map<string, FixedListing>();
   if (!isConfigured()) {
     logger.warn('fixed-templates', 'NOTION_FIXED_ASIN_DATA_SOURCE_ID not configured');
     return map;
@@ -73,12 +90,15 @@ export const fetchFixedDescriptions = async (): Promise<Map<string, string>> => 
       const asin = extractTitleText(props.ASIN);
       const description = extractRichText(props['投稿文']);
       if (!asin || !description.trim()) continue;
-      map.set(asin, description);
+      const rawNumber = extractNumber(props['参考定価']);
+      const manualReferencePrice =
+        rawNumber !== null && rawNumber > 0 ? rawNumber : undefined;
+      map.set(asin, { description, manualReferencePrice });
     }
     if (!res.has_more || !res.next_cursor) break;
     cursor = res.next_cursor;
   }
-  logger.info('fixed-templates', 'descriptions fetched', { count: map.size });
+  logger.info('fixed-templates', 'listings fetched', { count: map.size });
   return map;
 };
 

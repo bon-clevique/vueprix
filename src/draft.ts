@@ -12,7 +12,7 @@ import {
   MIN_PRICE_YEN,
 } from './config.js';
 import { calcDropPercent, filterByActiveAsins, isGoodDeal } from './filter.js';
-import { composeFixedPostText, fetchFixedDescriptions } from './fixed-templates.js';
+import { composeFixedPostText, fetchFixedListings, type FixedListing } from './fixed-templates.js';
 import { appendHistory } from './history.js';
 import { checkAsin, getDeals } from './keepa.js';
 import { logger } from './logger.js';
@@ -152,23 +152,31 @@ const collectFixed = async (): Promise<Candidate[]> => {
 // 景表法 (二重価格表示) 観点でも安全側の cap として機能する。
 const MAX_REASONABLE_DROP_PERCENT = 95;
 
-// `collectFixed` で取れた Keepa fallback の reference と、PA-API SavingBasis を比較して最終 reference を決める。
-// SavingBasis 優先 (Amazon UI の打消し線価格と一貫させるため) + 取れなければ Keepa fallback を維持。
-// SavingBasis 採用判定:
-//   - savingBasis > currentPrice (値下げになっている)
+// `collectFixed` で取れた Keepa fallback の reference と、PA-API SavingBasis / Notion 手動入力 参考定価
+// を比較して最終 reference を決める。優先順位:
+//   1. PA-API SavingBasis (Amazon UI 打消し線価格と一貫)
+//   2. Notion 手動入力 参考定価 (bon が運用で設定する希望小売価格 / 旧定価)
+//   3. Keepa fallback (referencePrice/dropPercent)
+// 採用判定 (各候補共通):
+//   - reference > currentPrice (値下げになっている)
 //   - 算出される dropPercent ≤ MAX_REASONABLE_DROP_PERCENT (異常値ガード)
-// どちらかを満たさない場合は Keepa fallback (collectFixed が確定した dropPercent/referencePrice) を使う。
+// どちらかを満たさない場合は次の候補に fall through。
 const resolveFixedReference = (
   candidate: Candidate,
   savingBasis: number | undefined,
-): { referencePrice: number; dropPercent: number; referenceSource: 'paapi-saving-basis' | 'keepa' } => {
+  manualReferencePrice: number | undefined,
+): {
+  referencePrice: number;
+  dropPercent: number;
+  referenceSource: 'paapi-saving-basis' | 'manual-reference-price' | 'keepa';
+} => {
   if (typeof savingBasis === 'number' && savingBasis > candidate.currentPrice) {
     const dropPercent = Math.max(
       0,
       Math.round(((savingBasis - candidate.currentPrice) / savingBasis) * 100),
     );
     if (dropPercent > MAX_REASONABLE_DROP_PERCENT) {
-      logger.warn('draft', 'SavingBasis drop exceeds sanity cap, falling back to Keepa', {
+      logger.warn('draft', 'SavingBasis drop exceeds sanity cap, falling back', {
         asin: candidate.asin,
         savingBasis,
         currentPrice: candidate.currentPrice,
@@ -177,6 +185,27 @@ const resolveFixedReference = (
       });
     } else {
       return { referencePrice: savingBasis, dropPercent, referenceSource: 'paapi-saving-basis' };
+    }
+  }
+  if (typeof manualReferencePrice === 'number' && manualReferencePrice > candidate.currentPrice) {
+    const dropPercent = Math.max(
+      0,
+      Math.round(((manualReferencePrice - candidate.currentPrice) / manualReferencePrice) * 100),
+    );
+    if (dropPercent > MAX_REASONABLE_DROP_PERCENT) {
+      logger.warn('draft', 'manual reference price drop exceeds sanity cap, falling back to Keepa', {
+        asin: candidate.asin,
+        manualReferencePrice,
+        currentPrice: candidate.currentPrice,
+        dropPercent,
+        cap: MAX_REASONABLE_DROP_PERCENT,
+      });
+    } else {
+      return {
+        referencePrice: manualReferencePrice,
+        dropPercent,
+        referenceSource: 'manual-reference-price',
+      };
     }
   }
   return {
@@ -192,11 +221,11 @@ const publishFixedCandidates = async (
   runId: string,
 ): Promise<number> => {
   if (candidates.length === 0) return 0;
-  let descriptions: Map<string, string>;
+  let listings: Map<string, FixedListing>;
   try {
-    descriptions = await fetchFixedDescriptions();
+    listings = await fetchFixedListings();
   } catch (err) {
-    logger.error('draft', 'fetchFixedDescriptions failed', {
+    logger.error('draft', 'fetchFixedListings failed', {
       error: err instanceof Error ? err.message : String(err),
     });
     return 0;
@@ -214,15 +243,17 @@ const publishFixedCandidates = async (
   }
   let postedCount = 0;
   for (const c of candidates) {
-    const description = descriptions.get(c.asin);
-    if (!description) {
-      logger.warn('draft', 'no fixed description in notion, skipping', { asin: c.asin });
+    const listing = listings.get(c.asin);
+    if (!listing) {
+      logger.warn('draft', 'no fixed listing in notion, skipping', { asin: c.asin });
       continue;
     }
+    const { description, manualReferencePrice } = listing;
     const paapiInfo = paapiByAsin.get(c.asin);
     const { referencePrice, dropPercent, referenceSource } = resolveFixedReference(
       c,
       paapiInfo?.savingBasis,
+      manualReferencePrice,
     );
     logger.info('draft', 'fixed candidate reference resolved', {
       asin: c.asin,
