@@ -12,11 +12,19 @@ export interface Deal {
   dropPercent: number;
 }
 
-// reference price の出所。`stats.avg` (90日平均) は flat array で priceType index ごとに 1 値:
+// reference price の出所。優先順位:
+//   1. paapi-saving-basis = PA-API GetItems の Offers.Listings[0].SavingBasis.Amount
+//      (Amazon UI の打消し線価格そのもの、UI 表記と完全一致)
+//   2-5. Keepa stats fallback: avg[4]=List Price → avg[0]=Amazon → avg[1]=New → min[0][1]=90日最安値
+// `stats.avg` (90日平均) は flat array で priceType index ごとに 1 値:
 //   0 = Amazon, 1 = New (3rd party), 4 = List Price (定価), ...
-// Amazon UI の割引率表示は通常 List Price ベースなので、avg[4] を最優先にして Amazon UI と一貫させる。
-// List Price 未設定の商品は Amazon / New の 90日平均、それも無ければ 90日最安値に段階退避する。
-export type ReferenceSource = 'list-price' | 'amazon-avg' | 'new-avg' | 'min-90d';
+// SavingBasis は Amazon が打消し線を表示する商品でのみ返る (Keepa の List Price とは independent)。
+export type ReferenceSource =
+  | 'paapi-saving-basis'
+  | 'list-price'
+  | 'amazon-avg'
+  | 'new-avg'
+  | 'min-90d';
 
 export interface PriceHistory {
   asin: string;
@@ -136,16 +144,22 @@ export const getDeals = async (
   return { deals, tokensLeft: res.data.tokensLeft ?? null };
 };
 
-// stats.avg / stats.min から reference price を選ぶ。Amazon UI の割引表示と一貫させるため
-// List Price (avg[4]) を最優先にし、無ければ Amazon (avg[0]) → New (avg[1]) → 90日最安値の順に退避する。
-// 「下げ」になっていない候補 (price <= current) は skip して次へ — 値上がり中の avg を reference にすると
-// dropPercent <= 0 となり投稿候補から外れる挙動と整合させる。
+// reference price を選ぶ。PA-API SavingBasis (Amazon UI の打消し線価格) があれば最優先採用、
+// なければ Keepa stats fallback chain: List Price (avg[4]) → Amazon (avg[0]) → New (avg[1]) → 90日最安値。
+// 「下げ」になっていない候補 (price <= current) は skip して次へ。
 //
 // 戻り値 null = どの候補も current より高くない (= 値下げと言えない) ことを意味する。
+//
+// savingBasis: PA-API GetItems で取得した Amazon UI 表示の定価。yen 整数。
+//   undefined / 0 / current 以下 のいずれでも Keepa fallback に落ちる。
 export const pickReferencePrice = (
   stats: NonNullable<NonNullable<KeepaProductResponse['products']>[number]['stats']>,
   current: number,
+  savingBasis?: number,
 ): { price: number; source: ReferenceSource } | null => {
+  if (typeof savingBasis === 'number' && savingBasis > current) {
+    return { price: savingBasis, source: 'paapi-saving-basis' };
+  }
   const candidates: Array<{ source: ReferenceSource; raw: number | undefined }> = [
     { source: 'list-price', raw: stats.avg?.[4] },
     { source: 'amazon-avg', raw: stats.avg?.[0] },

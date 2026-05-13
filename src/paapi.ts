@@ -10,6 +10,10 @@ export interface ProductInfo {
   imageUrl: string;
   currentPrice: number;
   affiliateUrl: string;
+  // Amazon UI の打消し線価格 (定価)。PA-API GetItems の Offers.Listings[0].SavingBasis.Amount。
+  // 商品ページに割引表示がない場合 / SavingBasis を Amazon が返さない場合 undefined。
+  // yen 整数。固定ASIN 経路で Keepa 由来 reference より優先採用する (Amazon UI と一貫させるため)。
+  savingBasis?: number;
 }
 
 interface PaapiItem {
@@ -17,7 +21,12 @@ interface PaapiItem {
   DetailPageURL?: string;
   ItemInfo?: { Title?: { DisplayValue?: string } };
   Images?: { Primary?: { Medium?: { URL?: string }; Large?: { URL?: string } } };
-  Offers?: { Listings?: Array<{ Price?: { Amount?: number; DisplayAmount?: string } }> };
+  Offers?: {
+    Listings?: Array<{
+      Price?: { Amount?: number; DisplayAmount?: string };
+      SavingBasis?: { Amount?: number; DisplayAmount?: string };
+    }>;
+  };
 }
 
 interface PaapiResponse {
@@ -74,7 +83,14 @@ const buildBody = (asins: string[]): string =>
     PartnerType: 'Associates',
     Marketplace: 'www.amazon.co.jp',
     ItemIds: asins,
-    Resources: ['Images.Primary.Medium', 'ItemInfo.Title', 'Offers.Listings.Price'],
+    Resources: [
+      'Images.Primary.Medium',
+      'ItemInfo.Title',
+      'Offers.Listings.Price',
+      // Offers.Listings.SavingBasis = Amazon UI の打消し線価格 (定価)。
+      // 固定ASIN 経路で reference price として最優先採用する (keepa avg より UI 表記と一貫)。
+      'Offers.Listings.SavingBasis',
+    ],
     Operation: 'GetItems',
   });
 
@@ -130,15 +146,22 @@ const parseProducts = (response: PaapiResponse): ProductInfo[] => {
     .map((item): ProductInfo | null => {
       const title = item.ItemInfo?.Title?.DisplayValue;
       const detailUrl = item.DetailPageURL;
-      const price = item.Offers?.Listings?.[0]?.Price?.Amount;
+      const listing = item.Offers?.Listings?.[0];
+      const price = listing?.Price?.Amount;
       const imageUrl = item.Images?.Primary?.Medium?.URL;
       if (!title || !detailUrl || typeof price !== 'number') return null;
+      const savingBasisAmount = listing?.SavingBasis?.Amount;
+      const savingBasis =
+        typeof savingBasisAmount === 'number' && savingBasisAmount > 0
+          ? Math.round(savingBasisAmount)
+          : undefined;
       return {
         asin: item.ASIN,
         title,
         imageUrl: imageUrl ?? '',
         currentPrice: Math.round(price),
         affiliateUrl: detailUrl,
+        ...(savingBasis !== undefined ? { savingBasis } : {}),
       };
     })
     .filter((p): p is ProductInfo => p !== null);

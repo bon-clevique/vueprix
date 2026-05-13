@@ -112,6 +112,10 @@ const collectDeals = async (): Promise<CollectDealsResult> => {
   return { candidates, lastTokensLeft };
 };
 
+// 固定ASIN は publishFixedCandidates で PA-API SavingBasis を取得して reference を再評価するため、
+// 本 fn の段階では DROP_THRESHOLD_PERCENT 判定を行わない。Keepa fallback の dropPercent/referencePrice は
+// fallback 候補として保持し、SavingBasis が取れなかった場合 (or current 以下だった場合) に使う。
+// MIN_PRICE_YEN early-skip は ASIN 自体が極端値 (¥1 等の Keepa sentinel artifact) の場合の保護として残す。
 const collectFixed = async (): Promise<Candidate[]> => {
   const candidates: Candidate[] = [];
   for (const asin of FIXED_ASINS) {
@@ -119,9 +123,6 @@ const collectFixed = async (): Promise<Candidate[]> => {
       const history = await checkAsin(asin);
       if (!history) continue;
       if (history.currentPrice < MIN_PRICE_YEN) continue;
-      if (!isGoodDeal(history.currentPrice, history.referencePrice, DROP_THRESHOLD_PERCENT)) {
-        continue;
-      }
       candidates.push({
         asin,
         title: history.title,
@@ -145,6 +146,46 @@ const collectFixed = async (): Promise<Candidate[]> => {
 // 投稿成功した候補は Notion 投稿文 DB に status=posted で記録 + post-history.jsonl に append。
 // 返り値: 実際に投稿された件数 (log / partial 判定 のため)。
 // 本 fn 内の失敗は warn ログのみで上位 run 全体は止めない (deals 経路の処理を継続)。
+// SavingBasis が現価から極端に乖離している場合の上限 (誇大広告防止)。
+// Amazon UI 上の割引率は通常 80% 程度が上限で、それを超える値は seller 設定の異常値か
+// PA-API レスポンス自体の問題を疑う。本値超過時は SavingBasis を採用せず Keepa fallback に落とす。
+// 景表法 (二重価格表示) 観点でも安全側の cap として機能する。
+const MAX_REASONABLE_DROP_PERCENT = 95;
+
+// `collectFixed` で取れた Keepa fallback の reference と、PA-API SavingBasis を比較して最終 reference を決める。
+// SavingBasis 優先 (Amazon UI の打消し線価格と一貫させるため) + 取れなければ Keepa fallback を維持。
+// SavingBasis 採用判定:
+//   - savingBasis > currentPrice (値下げになっている)
+//   - 算出される dropPercent ≤ MAX_REASONABLE_DROP_PERCENT (異常値ガード)
+// どちらかを満たさない場合は Keepa fallback (collectFixed が確定した dropPercent/referencePrice) を使う。
+const resolveFixedReference = (
+  candidate: Candidate,
+  savingBasis: number | undefined,
+): { referencePrice: number; dropPercent: number; referenceSource: 'paapi-saving-basis' | 'keepa' } => {
+  if (typeof savingBasis === 'number' && savingBasis > candidate.currentPrice) {
+    const dropPercent = Math.max(
+      0,
+      Math.round(((savingBasis - candidate.currentPrice) / savingBasis) * 100),
+    );
+    if (dropPercent > MAX_REASONABLE_DROP_PERCENT) {
+      logger.warn('draft', 'SavingBasis drop exceeds sanity cap, falling back to Keepa', {
+        asin: candidate.asin,
+        savingBasis,
+        currentPrice: candidate.currentPrice,
+        dropPercent,
+        cap: MAX_REASONABLE_DROP_PERCENT,
+      });
+    } else {
+      return { referencePrice: savingBasis, dropPercent, referenceSource: 'paapi-saving-basis' };
+    }
+  }
+  return {
+    referencePrice: candidate.referencePrice,
+    dropPercent: candidate.dropPercent,
+    referenceSource: 'keepa',
+  };
+};
+
 const publishFixedCandidates = async (
   candidates: readonly Candidate[],
   partnerTag: string,
@@ -160,6 +201,17 @@ const publishFixedCandidates = async (
     });
     return 0;
   }
+  // PA-API GetItems で SavingBasis (Amazon UI の打消し線価格) を取得。失敗しても Keepa fallback で
+  // 投稿可能なので run 全体を止めない。複数候補をまとめて 1 call (getItems は max 10 ASIN/call)。
+  const paapiByAsin = new Map<string, ProductInfo>();
+  try {
+    const products = await getItems(candidates.map((c) => c.asin));
+    for (const p of products) paapiByAsin.set(p.asin, p);
+  } catch (err) {
+    logger.warn('draft', 'PA-API getItems failed for fixed asins, falling back to Keepa only', {
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
   let postedCount = 0;
   for (const c of candidates) {
     const description = descriptions.get(c.asin);
@@ -167,18 +219,39 @@ const publishFixedCandidates = async (
       logger.warn('draft', 'no fixed description in notion, skipping', { asin: c.asin });
       continue;
     }
+    const paapiInfo = paapiByAsin.get(c.asin);
+    const { referencePrice, dropPercent, referenceSource } = resolveFixedReference(
+      c,
+      paapiInfo?.savingBasis,
+    );
+    logger.info('draft', 'fixed candidate reference resolved', {
+      asin: c.asin,
+      currentPrice: c.currentPrice,
+      referencePrice,
+      dropPercent,
+      referenceSource,
+    });
+    if (dropPercent < DROP_THRESHOLD_PERCENT) {
+      logger.info('draft', 'fixed candidate below threshold, skipping', {
+        asin: c.asin,
+        dropPercent,
+        threshold: DROP_THRESHOLD_PERCENT,
+        referenceSource,
+      });
+      continue;
+    }
     const affiliateUrl = buildAffiliateUrl(c.asin, partnerTag);
     const composed = composeFixedPostText(
       description,
-      c.dropPercent,
+      dropPercent,
       c.currentPrice,
-      c.referencePrice,
+      referencePrice,
       affiliateUrl,
     );
     if (!composed) {
       logger.warn('draft', 'composed post text exceeds 280 chars, skipping', {
         asin: c.asin,
-        dropPercent: c.dropPercent,
+        dropPercent,
       });
       continue;
     }
@@ -205,8 +278,8 @@ const publishFixedCandidates = async (
           postText: composed,
           amazonUrl: affiliateUrl,
           currentPrice: c.currentPrice,
-          referencePrice: c.referencePrice,
-          dropPercent: c.dropPercent,
+          referencePrice,
+          dropPercent,
           category: c.category,
           generatedAt: postedAt,
         },
@@ -232,8 +305,8 @@ const publishFixedCandidates = async (
         asin: c.asin,
         title: c.title,
         currentPrice: c.currentPrice,
-        referencePrice: c.referencePrice,
-        dropPercent: c.dropPercent,
+        referencePrice,
+        dropPercent,
         source: 'fixed-direct',
         category: c.category,
         posters: postersBool,
