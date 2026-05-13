@@ -12,11 +12,18 @@ export interface Deal {
   dropPercent: number;
 }
 
+// reference price の出所。`stats.avg` (90日平均) は flat array で priceType index ごとに 1 値:
+//   0 = Amazon, 1 = New (3rd party), 4 = List Price (定価), ...
+// Amazon UI の割引率表示は通常 List Price ベースなので、avg[4] を最優先にして Amazon UI と一貫させる。
+// List Price 未設定の商品は Amazon / New の 90日平均、それも無ければ 90日最安値に段階退避する。
+export type ReferenceSource = 'list-price' | 'amazon-avg' | 'new-avg' | 'min-90d';
+
 export interface PriceHistory {
   asin: string;
   title: string;
   currentPrice: number;
-  minPrice90d: number;
+  referencePrice: number;
+  referenceSource: ReferenceSource;
   dropPercent: number;
 }
 
@@ -45,7 +52,10 @@ interface KeepaProductResponse {
     title?: string;
     stats?: {
       current?: number[];
-      min?: Array<[number, number]>;
+      // 各 priceType の「過去 N 日最安値」を [timestamp, price] で持つ (一部が null)。
+      min?: Array<[number, number] | null>;
+      // 各 priceType の「過去 N 日平均」を 1 値で持つ (Deals API の 2 次元配列とは別形式)。
+      avg?: number[];
     };
     csv?: number[][];
   }>;
@@ -126,6 +136,29 @@ export const getDeals = async (
   return { deals, tokensLeft: res.data.tokensLeft ?? null };
 };
 
+// stats.avg / stats.min から reference price を選ぶ。Amazon UI の割引表示と一貫させるため
+// List Price (avg[4]) を最優先にし、無ければ Amazon (avg[0]) → New (avg[1]) → 90日最安値の順に退避する。
+// 「下げ」になっていない候補 (price <= current) は skip して次へ — 値上がり中の avg を reference にすると
+// dropPercent <= 0 となり投稿候補から外れる挙動と整合させる。
+//
+// 戻り値 null = どの候補も current より高くない (= 値下げと言えない) ことを意味する。
+export const pickReferencePrice = (
+  stats: NonNullable<NonNullable<KeepaProductResponse['products']>[number]['stats']>,
+  current: number,
+): { price: number; source: ReferenceSource } | null => {
+  const candidates: Array<{ source: ReferenceSource; raw: number | undefined }> = [
+    { source: 'list-price', raw: stats.avg?.[4] },
+    { source: 'amazon-avg', raw: stats.avg?.[0] },
+    { source: 'new-avg',    raw: stats.avg?.[1] },
+    { source: 'min-90d',    raw: stats.min?.[0]?.[1] },
+  ];
+  for (const c of candidates) {
+    const price = toYen(c.raw);
+    if (price > current) return { price, source: c.source };
+  }
+  return null;
+};
+
 export const checkAsin = async (asin: string): Promise<PriceHistory | null> => {
   const url = `${KEEPA_BASE}/product`;
   const res = await axios.get<KeepaProductResponse>(url, {
@@ -138,17 +171,26 @@ export const checkAsin = async (asin: string): Promise<PriceHistory | null> => {
   });
   const product = res.data.products?.[0];
   if (!product?.stats) return null;
-  const current = toYen(product.stats.current?.[0]);
-  const minEntry = product.stats.min?.[0];
-  const min90 = minEntry ? toYen(minEntry[1]) : 0;
-  if (!current || !min90) return null;
+  // Amazon 出品なし商品 (current[0]=-1) でも New (current[1]) で投稿できるよう fallback する。
+  const current = toYen(product.stats.current?.[0]) || toYen(product.stats.current?.[1]);
+  if (!current) return null;
+  const picked = pickReferencePrice(product.stats, current);
+  if (!picked) {
+    logger.debug('keepa', 'no reference price above current', { asin, current });
+    return null;
+  }
   const title = typeof product.title === 'string' && product.title.length > 0 ? product.title : '';
   if (!title) {
     logger.debug('keepa', 'checkAsin dropped (no title)', { asin });
     return null;
   }
-  // 「過去90日最安値を更に下回るほどの大下落」を表す。current >= min90 の通常時は 0 以下となり、
-  // 後続 isGoodDeal(current, min90) で投稿対象から除外される。
-  const dropPercent = Math.max(0, Math.round(((min90 - current) / min90) * 100));
-  return { asin, title, currentPrice: current, minPrice90d: min90, dropPercent };
+  const dropPercent = Math.max(0, Math.round(((picked.price - current) / picked.price) * 100));
+  return {
+    asin,
+    title,
+    currentPrice: current,
+    referencePrice: picked.price,
+    referenceSource: picked.source,
+    dropPercent,
+  };
 };

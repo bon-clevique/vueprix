@@ -5,9 +5,13 @@ const getDealsMock = vi.fn();
 const checkAsinMock = vi.fn();
 const getItemsMock = vi.fn();
 const createDraftPageMock = vi.fn();
+const createPostedPageMock = vi.fn();
 const queryDuplicateAsinsMock = vi.fn();
 const loadBlocklistMock = vi.fn();
 const appendRunLogMock = vi.fn();
+const fetchFixedDescriptionsMock = vi.fn();
+const dispatchMock = vi.fn();
+const appendHistoryMock = vi.fn();
 
 vi.mock('./keepa.js', () => ({
   getDeals: (...args: unknown[]) => getDealsMock(...args),
@@ -20,6 +24,7 @@ vi.mock('./paapi.js', () => ({
 
 vi.mock('./notion.js', () => ({
   createDraftPage: (...args: unknown[]) => createDraftPageMock(...args),
+  createPostedPage: (...args: unknown[]) => createPostedPageMock(...args),
   queryDuplicateAsins: (...args: unknown[]) => queryDuplicateAsinsMock(...args),
 }));
 
@@ -29,6 +34,28 @@ vi.mock('./blocklist.js', () => ({
 
 vi.mock('./run-log.js', () => ({
   appendRunLog: (...args: unknown[]) => appendRunLogMock(...args),
+}));
+
+vi.mock('./fixed-templates.js', async () => {
+  const actual = await vi.importActual<typeof import('./fixed-templates.js')>('./fixed-templates.js');
+  return {
+    // composeFixedPostText は pure fn なので実装を再利用。fetchFixedDescriptions のみ mock。
+    composeFixedPostText: actual.composeFixedPostText,
+    fetchFixedDescriptions: (...args: unknown[]) => fetchFixedDescriptionsMock(...args),
+  };
+});
+
+vi.mock('./posters/index.js', async () => {
+  const actual = await vi.importActual<typeof import('./posters/index.js')>('./posters/index.js');
+  return {
+    posters: actual.posters,
+    anySucceeded: actual.anySucceeded,
+    dispatch: (...args: unknown[]) => dispatchMock(...args),
+  };
+});
+
+vi.mock('./history.js', () => ({
+  appendHistory: (...args: unknown[]) => appendHistoryMock(...args),
 }));
 
 // FIXED_ASINS は config.ts に const で定義されているので、mockKeepa の checkAsin に
@@ -43,9 +70,13 @@ const resetAllMocks = () => {
   checkAsinMock.mockReset();
   getItemsMock.mockReset();
   createDraftPageMock.mockReset();
+  createPostedPageMock.mockReset();
   queryDuplicateAsinsMock.mockReset();
   loadBlocklistMock.mockReset();
   appendRunLogMock.mockReset();
+  fetchFixedDescriptionsMock.mockReset();
+  dispatchMock.mockReset();
+  appendHistoryMock.mockReset();
 
   // sane defaults: tokensLeft は null にして「設定無し」を示す
   // (各 test が個別カテゴリで mockImplementation すれば、その値が lastTokensLeft に反映される)
@@ -53,9 +84,15 @@ const resetAllMocks = () => {
   checkAsinMock.mockResolvedValue(null);
   getItemsMock.mockResolvedValue([]);
   createDraftPageMock.mockResolvedValue('page-mock-id');
+  createPostedPageMock.mockResolvedValue('posted-page-mock-id');
   queryDuplicateAsinsMock.mockResolvedValue(new Set<string>());
   loadBlocklistMock.mockResolvedValue(new Set<string>());
   appendRunLogMock.mockResolvedValue(undefined);
+  fetchFixedDescriptionsMock.mockResolvedValue(new Map<string, string>());
+  // 固定ASIN 即投稿経路は本 default だと dispatch が呼ばれずに済む (fetchFixedDescriptions が空 Map)。
+  // 投稿成功シナリオの test 内で dispatchMock.mockResolvedValueOnce({...}) を上書きする。
+  dispatchMock.mockResolvedValue({ x: { ok: false }, bluesky: { ok: false } });
+  appendHistoryMock.mockResolvedValue(undefined);
 };
 
 // title はデフォルトで food whitelist (`国産|日本産|日本製`) を通すようにしている。
@@ -337,9 +374,9 @@ describe('draft.main integration', () => {
     expect(calledAsins).not.toContain('B000NOWL');
   });
 
-  it('includes fixed candidates outside the per-category quota cap', async () => {
-    // food quota=5 を埋めた上で、fixed (FIXED_ASINS) からも 1 件追加されることを確認。
-    // fixed 候補は CATEGORY_QUOTA の対象外で別経路。
+  it('routes fixed-list candidates to direct-post path (not createDraftPage)', async () => {
+    // 固定ASIN は Notion 投稿文 DB の紹介文を取得 → X/Bluesky 即投稿 → createPostedPage で記録する
+    // 独立フローに乗る。deals 経路の createDraftPage には混ざらない (food quota 5 件が full)。
     getDealsMock.mockImplementation((categoryId: number) => {
       if (categoryId === 57239051) {
         return Promise.resolve(
@@ -352,27 +389,128 @@ describe('draft.main integration', () => {
       }
       return Promise.resolve(dealsResult([]));
     });
-    // checkAsin (FIXED_ASINS の各 ASIN について) — 1 件だけ history を返す
     checkAsinMock.mockImplementation((asin: string) => {
       if (asin === 'B0C1JGD2T6') {
         return Promise.resolve({
           asin,
           title: 'カリタ コーヒーフィルター',
           currentPrice: 800,
-          minPrice90d: 1000,
+          referencePrice: 1000,
+          referenceSource: 'list-price' as const,
           dropPercent: 20,
         });
       }
       return Promise.resolve(null);
     });
+    fetchFixedDescriptionsMock.mockResolvedValue(
+      new Map<string, string>([['B0C1JGD2T6', 'カリタの定番フィルター。1〜2人用。']]),
+    );
+    dispatchMock.mockResolvedValue({
+      x: { ok: true, url: 'https://x.com/post/1' },
+      bluesky: { ok: true, url: 'https://bsky.app/post/1' },
+    });
 
     const { main } = await import('./draft.js');
     await main();
 
-    // food=5 + fixed=1 で 6 件になる (food quota 5 を超えても fixed は別枠)
-    expect(createDraftPageMock).toHaveBeenCalledTimes(6);
-    const calledAsins = createDraftPageMock.mock.calls.map((c) => (c[0] as { asin: string }).asin);
-    expect(calledAsins).toContain('B0C1JGD2T6');
+    // deals 経路: food quota=5 のみ (固定ASIN は混ざらない)
+    expect(createDraftPageMock).toHaveBeenCalledTimes(5);
+    const draftAsins = createDraftPageMock.mock.calls.map((c) => (c[0] as { asin: string }).asin);
+    expect(draftAsins).not.toContain('B0C1JGD2T6');
+
+    // 固定ASIN 経路: dispatch 呼ばれる + createPostedPage で 1 件記録 + appendHistory で source=fixed-direct
+    expect(dispatchMock).toHaveBeenCalledTimes(1);
+    const dispatchInput = dispatchMock.mock.calls[0]?.[1] as { asin: string; text: string };
+    expect(dispatchInput.asin).toBe('B0C1JGD2T6');
+    expect(dispatchInput.text).toContain('【20% OFF】');
+    expect(dispatchInput.text).toContain('カリタの定番フィルター');
+
+    expect(createPostedPageMock).toHaveBeenCalledTimes(1);
+    const postedArg = createPostedPageMock.mock.calls[0]?.[0] as { asin: string; postText: string };
+    expect(postedArg.asin).toBe('B0C1JGD2T6');
+    expect(postedArg.postText).toBe(dispatchInput.text);
+
+    expect(appendHistoryMock).toHaveBeenCalledTimes(1);
+    const historyArg = appendHistoryMock.mock.calls[0]?.[0] as { source: string; asin: string };
+    expect(historyArg.source).toBe('fixed-direct');
+    expect(historyArg.asin).toBe('B0C1JGD2T6');
+  });
+
+  it('skips fixed candidates with no description in Notion', async () => {
+    checkAsinMock.mockImplementation((asin: string) => {
+      if (asin === 'B0C1JGD2T6') {
+        return Promise.resolve({
+          asin,
+          title: 'カリタ コーヒーフィルター',
+          currentPrice: 800,
+          referencePrice: 1000,
+          referenceSource: 'list-price' as const,
+          dropPercent: 20,
+        });
+      }
+      return Promise.resolve(null);
+    });
+    fetchFixedDescriptionsMock.mockResolvedValue(new Map<string, string>());  // 空 Map
+
+    const { main } = await import('./draft.js');
+    await main();
+
+    expect(dispatchMock).not.toHaveBeenCalled();
+    expect(createPostedPageMock).not.toHaveBeenCalled();
+    expect(appendHistoryMock).not.toHaveBeenCalled();
+  });
+
+  it('does not record fixed candidate when all posters fail', async () => {
+    checkAsinMock.mockImplementation((asin: string) => {
+      if (asin === 'B0C1JGD2T6') {
+        return Promise.resolve({
+          asin,
+          title: 'カリタ コーヒーフィルター',
+          currentPrice: 800,
+          referencePrice: 1000,
+          referenceSource: 'list-price' as const,
+          dropPercent: 20,
+        });
+      }
+      return Promise.resolve(null);
+    });
+    fetchFixedDescriptionsMock.mockResolvedValue(
+      new Map<string, string>([['B0C1JGD2T6', '紹介文']]),
+    );
+    dispatchMock.mockResolvedValue({ x: { ok: false }, bluesky: { ok: false } });
+
+    const { main } = await import('./draft.js');
+    await main();
+
+    expect(dispatchMock).toHaveBeenCalledTimes(1);
+    expect(createPostedPageMock).not.toHaveBeenCalled();
+    expect(appendHistoryMock).not.toHaveBeenCalled();
+  });
+
+  it('skips fixed candidate when active set already contains it (24h cooldown)', async () => {
+    queryDuplicateAsinsMock.mockResolvedValue(new Set<string>(['B0C1JGD2T6']));
+    checkAsinMock.mockImplementation((asin: string) => {
+      if (asin === 'B0C1JGD2T6') {
+        return Promise.resolve({
+          asin,
+          title: 'カリタ コーヒーフィルター',
+          currentPrice: 800,
+          referencePrice: 1000,
+          referenceSource: 'list-price' as const,
+          dropPercent: 20,
+        });
+      }
+      return Promise.resolve(null);
+    });
+    fetchFixedDescriptionsMock.mockResolvedValue(
+      new Map<string, string>([['B0C1JGD2T6', '紹介文']]),
+    );
+
+    const { main } = await import('./draft.js');
+    await main();
+
+    expect(dispatchMock).not.toHaveBeenCalled();
+    expect(createPostedPageMock).not.toHaveBeenCalled();
   });
 
   it('creates draft with empty postText (Notion AI 運用)', async () => {

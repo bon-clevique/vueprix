@@ -12,14 +12,18 @@ import {
   MIN_PRICE_YEN,
 } from './config.js';
 import { calcDropPercent, filterByActiveAsins, isGoodDeal } from './filter.js';
+import { composeFixedPostText, fetchFixedDescriptions } from './fixed-templates.js';
+import { appendHistory } from './history.js';
 import { checkAsin, getDeals } from './keepa.js';
 import { logger } from './logger.js';
 import {
   createDraftPage,
+  createPostedPage,
   queryDuplicateAsins,
   type DraftCandidate,
 } from './notion.js';
 import { getItems, type ProductInfo } from './paapi.js';
+import { anySucceeded, dispatch, posters } from './posters/index.js';
 import { appendRunLog, type RunStatus } from './run-log.js';
 import { passesTitleWhitelist } from './title-filter.js';
 
@@ -115,14 +119,14 @@ const collectFixed = async (): Promise<Candidate[]> => {
       const history = await checkAsin(asin);
       if (!history) continue;
       if (history.currentPrice < MIN_PRICE_YEN) continue;
-      if (!isGoodDeal(history.currentPrice, history.minPrice90d, DROP_THRESHOLD_PERCENT)) {
+      if (!isGoodDeal(history.currentPrice, history.referencePrice, DROP_THRESHOLD_PERCENT)) {
         continue;
       }
       candidates.push({
         asin,
         title: history.title,
         currentPrice: history.currentPrice,
-        referencePrice: history.minPrice90d,
+        referencePrice: history.referencePrice,
         dropPercent: history.dropPercent,
         source: 'fixed',
         category: CATEGORY_FIXED,
@@ -137,15 +141,112 @@ const collectFixed = async (): Promise<Candidate[]> => {
   return candidates;
 };
 
-const dedupe = (candidates: Candidate[]): Candidate[] => {
-  const seen = new Set<string>();
-  const result: Candidate[] = [];
-  for (const c of candidates) {
-    if (seen.has(c.asin)) continue;
-    seen.add(c.asin);
-    result.push(c);
+// 固定ASIN 候補を Notion 投稿文 DB から取得した紹介文と結合し、X/Bluesky に即投稿する。
+// 投稿成功した候補は Notion 投稿文 DB に status=posted で記録 + post-history.jsonl に append。
+// 返り値: 実際に投稿された件数 (log / partial 判定 のため)。
+// 本 fn 内の失敗は warn ログのみで上位 run 全体は止めない (deals 経路の処理を継続)。
+const publishFixedCandidates = async (
+  candidates: readonly Candidate[],
+  partnerTag: string,
+  runId: string,
+): Promise<number> => {
+  if (candidates.length === 0) return 0;
+  let descriptions: Map<string, string>;
+  try {
+    descriptions = await fetchFixedDescriptions();
+  } catch (err) {
+    logger.error('draft', 'fetchFixedDescriptions failed', {
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return 0;
   }
-  return result;
+  let postedCount = 0;
+  for (const c of candidates) {
+    const description = descriptions.get(c.asin);
+    if (!description) {
+      logger.warn('draft', 'no fixed description in notion, skipping', { asin: c.asin });
+      continue;
+    }
+    const affiliateUrl = buildAffiliateUrl(c.asin, partnerTag);
+    const composed = composeFixedPostText(
+      description,
+      c.dropPercent,
+      c.currentPrice,
+      c.referencePrice,
+      affiliateUrl,
+    );
+    if (!composed) {
+      logger.warn('draft', 'composed post text exceeds 280 chars, skipping', {
+        asin: c.asin,
+        dropPercent: c.dropPercent,
+      });
+      continue;
+    }
+    let result;
+    try {
+      result = await dispatch(posters, { asin: c.asin, text: composed });
+    } catch (err) {
+      logger.error('draft', 'fixed dispatch threw', {
+        asin: c.asin,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      continue;
+    }
+    if (!anySucceeded(result)) {
+      logger.warn('draft', 'all posters failed for fixed asin', { asin: c.asin });
+      continue;
+    }
+    const postedAt = new Date();
+    try {
+      await createPostedPage(
+        {
+          asin: c.asin,
+          title: c.title,
+          postText: composed,
+          amazonUrl: affiliateUrl,
+          currentPrice: c.currentPrice,
+          referencePrice: c.referencePrice,
+          dropPercent: c.dropPercent,
+          category: c.category,
+          generatedAt: postedAt,
+        },
+        postedAt,
+        { x: result.x?.url, bluesky: result.bluesky?.url },
+      );
+    } catch (err) {
+      logger.error('draft', 'createPostedPage failed (post is live on SNS already)', {
+        asin: c.asin,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      // SNS 投稿は成功済みなので continue ではなく history append には進む。
+    }
+    const postersBool = Object.fromEntries(
+      Object.entries(result).map(([k, v]) => [k, v.ok]),
+    );
+    // appendHistory が file I/O 失敗で throw すると loop 全体が abort し、後続候補が silent に skip
+    // される (run-log も failure 判定になる)。SNS 投稿は live のため history 失敗は warn ログのみで継続。
+    try {
+      await appendHistory({
+        timestamp: postedAt.toISOString(),
+        runId,
+        asin: c.asin,
+        title: c.title,
+        currentPrice: c.currentPrice,
+        referencePrice: c.referencePrice,
+        dropPercent: c.dropPercent,
+        source: 'fixed-direct',
+        category: c.category,
+        posters: postersBool,
+      });
+    } catch (err) {
+      logger.error('draft', 'appendHistory failed for fixed-direct post', {
+        asin: c.asin,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+    postedCount += 1;
+  }
+  return postedCount;
 };
 
 // Keepa deals 由来候補を CATEGORY_QUOTA に基づいて選別する。
@@ -220,25 +321,29 @@ export const main = async (): Promise<void> => {
       fixed: fixedCandidates.length,
     });
 
-    // dedupe は fixed を優先 (同 ASIN なら fixed として残す)。
-    const merged = dedupe([...fixedCandidates, ...dealCandidates]);
-    const afterBlocklist = merged.filter((c) => !blocklist.has(c.asin));
-    // filter.ts の helper に統一 (旧: inline filter で同義実装の重複)。
+    // fixed は Notion AI 経路を介さず Keepa 値下げ検知 → composeFixedPostText → X/Bluesky 即投稿 →
+    // Notion 投稿文 DB に status=posted で記録、の独立フロー。activeAsins / blocklist の除外も本ループ内で実施。
+    const fixedFiltered = fixedCandidates
+      .filter((c) => !blocklist.has(c.asin))
+      .filter((c) => !activeAsins.has(c.asin));
+    const fixedPostedCount = await publishFixedCandidates(fixedFiltered, partnerTag, runId);
+
+    // deals 経路のみが従来通り createDraftPage (status=backlog) に進む。
+    const afterBlocklist = dealCandidates.filter((c) => !blocklist.has(c.asin));
     const filtered = filterByActiveAsins(afterBlocklist, activeAsins);
-    // fixed は quota 対象外で全件採用。deals は CATEGORY_QUOTA で枠分配。
-    const fixedTargets = filtered.filter((c) => c.source === 'fixed');
-    const dealTargets = selectByQuota(filtered.filter((c) => c.source === 'deals'));
-    // safety cap (PA-API / Notion 連打抑制)。通常は CATEGORY_QUOTA 合計 + #fixed 以下に収まる想定。
-    const targets = [...fixedTargets, ...dealTargets].slice(0, MAX_POSTS_PER_RUN);
+    const dealTargets = selectByQuota(filtered);
+    // safety cap (PA-API / Notion 連打抑制)。固定ASIN の即投稿分は別カウントなので cap 対象外。
+    const targets = dealTargets.slice(0, MAX_POSTS_PER_RUN);
     targetsCount = targets.length;
     logger.info('draft', 'targets selected', {
-      afterDedupe: merged.length,
-      afterBlocklist: afterBlocklist.length,
-      afterActive: filtered.length,
-      fixedTargets: fixedTargets.length,
+      dealsAfterBlocklist: afterBlocklist.length,
+      dealsAfterActive: filtered.length,
       dealTargets: dealTargets.length,
+      fixedPosted: fixedPostedCount,
       willDraft: targets.length,
     });
+    // 即投稿された固定ASIN は drafted には数えないが、partial 判定に巻き込まれないよう draftedCount は
+    // deals 経路ぶんだけ追跡する (固定ASIN 失敗は warn ログのみで partial 化しない方針)。
 
     if (targets.length === 0) {
       logger.info('draft', 'no targets, run finished');

@@ -3,12 +3,14 @@ name: vueprix-draft
 # Required GitHub Actions secrets:
 #   KEEPA_API_KEY
 #   PAAPI_ACCESS_KEY, PAAPI_SECRET_KEY, PAAPI_PARTNER_TAG
-#   NOTION_API_KEY, NOTION_VUEPRIX_DATA_SOURCE_ID
+#   NOTION_API_KEY, NOTION_VUEPRIX_DATA_SOURCE_ID, NOTION_FIXED_ASIN_DATA_SOURCE_ID
+#   X_API_KEY, X_API_SECRET, X_ACCESS_TOKEN, X_ACCESS_TOKEN_SECRET (固定ASIN 即投稿)
+#   BSKY_IDENTIFIER, BSKY_PASSWORD (固定ASIN 即投稿)
 #
-# X / Bluesky 投稿は bot-publish.yml (repository_dispatch) 側で実行する。
-# 本 workflow は Notion DB に Status=pending_review の候補を書き込むだけ。
-# 投稿文 (理由 / 投稿文_X / 投稿文_Bluesky) は空文字列で作成され、
-# Notion AI で人が文言を埋めてから Status=approved に遷移させる運用。
+# deals 経路: Notion DB に Status=backlog で候補を書き込み、Notion AI で人が文言を埋めて
+# approved → bot-publish.yml (repository_dispatch) で投稿。
+# 固定ASIN 経路: 紹介文を NOTION_FIXED_ASIN_DATA_SOURCE_ID DB から取得して X/Bluesky に即投稿、
+# 同時に投稿文 DB に Status=posted で記録。
 
 on:
   schedule:
@@ -47,6 +49,13 @@ jobs:
           NOTION_API_KEY: ${{ secrets.NOTION_API_KEY }}
           NOTION_VUEPRIX_DATA_SOURCE_ID: ${{ secrets.NOTION_VUEPRIX_DATA_SOURCE_ID }}
           NOTION_VUEPRIX_RUN_LOG_DATA_SOURCE_ID: ${{ secrets.NOTION_VUEPRIX_RUN_LOG_DATA_SOURCE_ID }}
+          NOTION_FIXED_ASIN_DATA_SOURCE_ID: ${{ secrets.NOTION_FIXED_ASIN_DATA_SOURCE_ID }}
+          X_API_KEY: ${{ secrets.X_API_KEY }}
+          X_API_SECRET: ${{ secrets.X_API_SECRET }}
+          X_ACCESS_TOKEN: ${{ secrets.X_ACCESS_TOKEN }}
+          X_ACCESS_TOKEN_SECRET: ${{ secrets.X_ACCESS_TOKEN_SECRET }}
+          BSKY_IDENTIFIER: ${{ secrets.BSKY_IDENTIFIER }}
+          BSKY_PASSWORD: ${{ secrets.BSKY_PASSWORD }}
           LOG_LEVEL: info
         run: npm run draft
 

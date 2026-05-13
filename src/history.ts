@@ -14,7 +14,8 @@ export interface PostHistoryEntry {
   dropPercent: number;
   // 'deals' / 'fixed' は draft 時のソース由来。
   // 'publish' は Notion DB 経由で publish された場合 (元 source は Notion DB に保存されていないため遡及できない)。
-  source: 'deals' | 'fixed' | 'publish';
+  // 'fixed-direct' は固定ASIN を Notion AI 経路を介さず X/Bluesky に即時投稿した場合 (draft.ts publishFixedCandidates)。
+  source: 'deals' | 'fixed' | 'publish' | 'fixed-direct';
   category: NotionCategory;
   posters: Record<string, boolean>;
 }

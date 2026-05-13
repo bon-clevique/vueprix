@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { parseDeal, toYen, type KeepaDealsItem } from './keepa.js';
+import { parseDeal, pickReferencePrice, toYen, type KeepaDealsItem } from './keepa.js';
 
 describe('toYen', () => {
   it('returns the value unchanged for positive integers (Amazon.co.jp returns yen as-is)', () => {
@@ -89,6 +89,71 @@ describe('parseDeal', () => {
 
   it('returns null when title is empty string', () => {
     const result = parseDeal(sampleItem({ title: '' }));
+    expect(result).toBeNull();
+  });
+});
+
+describe('pickReferencePrice', () => {
+  // Real Keepa product API stats shape (verified 2026-05-13 via scripts/verify-keepa-product-avg.ts
+  // against B09JL4R6SX). stats.avg is a flat number[] indexed by priceType:
+  //   [0] = Amazon, [1] = New (3rd party), [4] = List Price.
+
+  it('prefers List Price (avg[4]) when it is the highest valid candidate', () => {
+    const stats = {
+      avg: [3230, 3174, -1, -1, 4399],
+      min: [[100, 2473]] as Array<[number, number] | null>,
+    };
+    const result = pickReferencePrice(stats, 2903);
+    expect(result).toEqual({ price: 4399, source: 'list-price' });
+  });
+
+  it('falls back to Amazon avg (avg[0]) when List Price is missing', () => {
+    const stats = {
+      avg: [3230, 3174, -1, -1, -1],
+      min: [[100, 2473]] as Array<[number, number] | null>,
+    };
+    const result = pickReferencePrice(stats, 2903);
+    expect(result).toEqual({ price: 3230, source: 'amazon-avg' });
+  });
+
+  it('falls back to New avg (avg[1]) when List Price and Amazon avg are missing', () => {
+    const stats = {
+      avg: [-1, 3174, -1, -1, -1],
+      min: [[100, 2473]] as Array<[number, number] | null>,
+    };
+    const result = pickReferencePrice(stats, 2903);
+    expect(result).toEqual({ price: 3174, source: 'new-avg' });
+  });
+
+  it('falls back to 90-day min when all avg candidates are missing', () => {
+    const stats = {
+      avg: [-1, -1, -1, -1, -1],
+      min: [[100, 3500]] as Array<[number, number] | null>,
+    };
+    const result = pickReferencePrice(stats, 2903);
+    expect(result).toEqual({ price: 3500, source: 'min-90d' });
+  });
+
+  it('skips List Price when it is not above current (no drop signal)', () => {
+    const stats = {
+      avg: [3230, 3174, -1, -1, 2500],  // List Price below current
+      min: [[100, 2473]] as Array<[number, number] | null>,
+    };
+    const result = pickReferencePrice(stats, 2903);
+    expect(result).toEqual({ price: 3230, source: 'amazon-avg' });
+  });
+
+  it('returns null when no candidate is above current', () => {
+    const stats = {
+      avg: [2500, 2400, -1, -1, 2600],
+      min: [[100, 2473]] as Array<[number, number] | null>,
+    };
+    const result = pickReferencePrice(stats, 2903);
+    expect(result).toBeNull();
+  });
+
+  it('returns null when stats are entirely empty', () => {
+    const result = pickReferencePrice({}, 2903);
     expect(result).toBeNull();
   });
 });
