@@ -487,6 +487,177 @@ describe('draft.main integration', () => {
     expect(appendHistoryMock).not.toHaveBeenCalled();
   });
 
+  it('uses PA-API SavingBasis as reference when present, overriding Keepa fallback', async () => {
+    // Keepa では 1% drop (閾値未満) だが、PA-API SavingBasis (¥1,490) で 28% drop → 投稿される。
+    // B07B5CD8NY 想定シナリオ: current=1080, Keepa-only では拾えないが SavingBasis で復活する。
+    checkAsinMock.mockImplementation((asin: string) => {
+      if (asin === 'B07B5CD8NY') {
+        return Promise.resolve({
+          asin,
+          title: 'クリニカ デンタルフロス',
+          currentPrice: 1080,
+          referencePrice: 1094,           // Keepa new-avg fallback
+          referenceSource: 'new-avg' as const,
+          dropPercent: 1,                 // Keepa fallback だと閾値未満
+        });
+      }
+      return Promise.resolve(null);
+    });
+    fetchFixedDescriptionsMock.mockResolvedValue(
+      new Map<string, string>([['B07B5CD8NY', 'Y字フロスでスキマケアに最適。']]),
+    );
+    getItemsMock.mockResolvedValue([
+      {
+        asin: 'B07B5CD8NY',
+        title: 'クリニカ デンタルフロス',
+        imageUrl: '',
+        currentPrice: 1080,
+        affiliateUrl: 'https://www.amazon.co.jp/dp/B07B5CD8NY',
+        savingBasis: 1490,
+      },
+    ]);
+    dispatchMock.mockResolvedValue({
+      x: { ok: true, url: 'https://x.com/post/x' },
+      bluesky: { ok: true, url: 'https://bsky.app/post/y' },
+    });
+
+    const { main } = await import('./draft.js');
+    await main();
+
+    // SavingBasis (1490) ベースで dropPercent = round((1490-1080)/1490*100) = 28 → 閾値 15 を超えて投稿される
+    expect(dispatchMock).toHaveBeenCalledTimes(1);
+    const dispatchInput = dispatchMock.mock.calls[0]?.[1] as { text: string };
+    expect(dispatchInput.text).toContain('【28% OFF】');
+    expect(dispatchInput.text).toContain('¥1,490');
+    expect(dispatchInput.text).toContain('¥1,080');
+
+    expect(createPostedPageMock).toHaveBeenCalledTimes(1);
+    const postedArg = createPostedPageMock.mock.calls[0]?.[0] as {
+      referencePrice: number;
+      dropPercent: number;
+    };
+    expect(postedArg.referencePrice).toBe(1490);
+    expect(postedArg.dropPercent).toBe(28);
+  });
+
+  it('falls back to Keepa when SavingBasis indicates suspiciously high drop (>95%, sanity cap)', async () => {
+    // PA-API が ¥99,999 を返した (異常値) → cap 超過で Keepa fallback (20%) に落とす。誇大広告防止。
+    checkAsinMock.mockImplementation((asin: string) => {
+      if (asin === 'B0C1JGD2T6') {
+        return Promise.resolve({
+          asin,
+          title: 'カリタ コーヒーフィルター',
+          currentPrice: 800,
+          referencePrice: 1000,
+          referenceSource: 'list-price' as const,
+          dropPercent: 20,
+        });
+      }
+      return Promise.resolve(null);
+    });
+    fetchFixedDescriptionsMock.mockResolvedValue(
+      new Map<string, string>([['B0C1JGD2T6', 'カリタの定番フィルター。']]),
+    );
+    getItemsMock.mockResolvedValue([
+      {
+        asin: 'B0C1JGD2T6',
+        title: 'カリタ コーヒーフィルター',
+        imageUrl: '',
+        currentPrice: 800,
+        affiliateUrl: 'https://www.amazon.co.jp/dp/B0C1JGD2T6',
+        savingBasis: 99999,  // 異常値: (99999-800)/99999 = 99.2% > 95
+      },
+    ]);
+    dispatchMock.mockResolvedValue({
+      x: { ok: true, url: 'https://x.com/p' },
+      bluesky: { ok: true, url: 'https://bsky.app/p' },
+    });
+
+    const { main } = await import('./draft.js');
+    await main();
+
+    expect(dispatchMock).toHaveBeenCalledTimes(1);
+    const dispatchInput = dispatchMock.mock.calls[0]?.[1] as { text: string };
+    expect(dispatchInput.text).toContain('【20% OFF】');  // Keepa fallback
+    const postedArg = createPostedPageMock.mock.calls[0]?.[0] as { referencePrice: number };
+    expect(postedArg.referencePrice).toBe(1000);  // SavingBasis 99999 が rejected、Keepa の 1000 が採用
+  });
+
+  it('falls back to Keepa reference when SavingBasis is missing', async () => {
+    // PA-API レスポンスに savingBasis 無し → Keepa fallback (20% drop) で投稿される。
+    checkAsinMock.mockImplementation((asin: string) => {
+      if (asin === 'B0C1JGD2T6') {
+        return Promise.resolve({
+          asin,
+          title: 'カリタ コーヒーフィルター',
+          currentPrice: 800,
+          referencePrice: 1000,
+          referenceSource: 'list-price' as const,
+          dropPercent: 20,
+        });
+      }
+      return Promise.resolve(null);
+    });
+    fetchFixedDescriptionsMock.mockResolvedValue(
+      new Map<string, string>([['B0C1JGD2T6', 'カリタの定番フィルター。']]),
+    );
+    getItemsMock.mockResolvedValue([
+      {
+        asin: 'B0C1JGD2T6',
+        title: 'カリタ コーヒーフィルター',
+        imageUrl: '',
+        currentPrice: 800,
+        affiliateUrl: 'https://www.amazon.co.jp/dp/B0C1JGD2T6',
+        // savingBasis なし
+      },
+    ]);
+    dispatchMock.mockResolvedValue({
+      x: { ok: true, url: 'https://x.com/p' },
+      bluesky: { ok: true, url: 'https://bsky.app/p' },
+    });
+
+    const { main } = await import('./draft.js');
+    await main();
+
+    expect(dispatchMock).toHaveBeenCalledTimes(1);
+    const dispatchInput = dispatchMock.mock.calls[0]?.[1] as { text: string };
+    expect(dispatchInput.text).toContain('【20% OFF】');  // Keepa fallback の dropPercent
+
+    const postedArg = createPostedPageMock.mock.calls[0]?.[0] as {
+      referencePrice: number;
+      dropPercent: number;
+    };
+    expect(postedArg.referencePrice).toBe(1000);  // Keepa list-price
+    expect(postedArg.dropPercent).toBe(20);
+  });
+
+  it('skips fixed candidate when neither SavingBasis nor Keepa reach threshold', async () => {
+    // Keepa 1% + SavingBasis なし or current 以下 → 閾値判定で skip、投稿されない。
+    checkAsinMock.mockImplementation((asin: string) => {
+      if (asin === 'B07B5CD8NY') {
+        return Promise.resolve({
+          asin,
+          title: 'クリニカ デンタルフロス',
+          currentPrice: 1080,
+          referencePrice: 1094,
+          referenceSource: 'new-avg' as const,
+          dropPercent: 1,
+        });
+      }
+      return Promise.resolve(null);
+    });
+    fetchFixedDescriptionsMock.mockResolvedValue(
+      new Map<string, string>([['B07B5CD8NY', 'Y字フロス。']]),
+    );
+    getItemsMock.mockResolvedValue([]);  // PA-API 空レスポンス
+
+    const { main } = await import('./draft.js');
+    await main();
+
+    expect(dispatchMock).not.toHaveBeenCalled();
+    expect(createPostedPageMock).not.toHaveBeenCalled();
+  });
+
   it('skips fixed candidate when active set already contains it (24h cooldown)', async () => {
     queryDuplicateAsinsMock.mockResolvedValue(new Set<string>(['B0C1JGD2T6']));
     checkAsinMock.mockImplementation((asin: string) => {

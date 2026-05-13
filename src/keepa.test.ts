@@ -156,4 +156,73 @@ describe('pickReferencePrice', () => {
     const result = pickReferencePrice({}, 2903);
     expect(result).toBeNull();
   });
+
+  it('prefers PA-API savingBasis over all Keepa candidates when savingBasis > current', () => {
+    const stats = {
+      avg: [3230, 3174, -1, -1, 4399],  // Keepa List Price=4399
+      min: [[100, 2473]] as Array<[number, number] | null>,
+    };
+    // savingBasis 5000 が Keepa list-price 4399 より高いが、優先順位で savingBasis が選ばれる
+    const result = pickReferencePrice(stats, 2903, 5000);
+    expect(result).toEqual({ price: 5000, source: 'paapi-saving-basis' });
+  });
+
+  it('prefers savingBasis even when Keepa List Price is higher (savingBasis = Amazon UI source of truth)', () => {
+    const stats = {
+      avg: [3230, 3174, -1, -1, 9999],  // Keepa avg[4] inflated (例: 並行輸入の極端値)
+      min: [[100, 2473]] as Array<[number, number] | null>,
+    };
+    const result = pickReferencePrice(stats, 2903, 4400);
+    expect(result).toEqual({ price: 4400, source: 'paapi-saving-basis' });
+  });
+
+  it('falls back to Keepa fallback when savingBasis is undefined', () => {
+    const stats = {
+      avg: [3230, 3174, -1, -1, 4399],
+      min: [[100, 2473]] as Array<[number, number] | null>,
+    };
+    const result = pickReferencePrice(stats, 2903, undefined);
+    expect(result).toEqual({ price: 4399, source: 'list-price' });
+  });
+
+  it('falls back to Keepa when savingBasis is not above current (drop signal absent)', () => {
+    // savingBasis 2500 が current 2903 を下回る → 採用せず Keepa に落ちる
+    const stats = {
+      avg: [3230, 3174, -1, -1, 4399],
+      min: [[100, 2473]] as Array<[number, number] | null>,
+    };
+    const result = pickReferencePrice(stats, 2903, 2500);
+    expect(result).toEqual({ price: 4399, source: 'list-price' });
+  });
+
+  it('does not pick savingBasis when it equals current (strict > guard)', () => {
+    // savingBasis == current は「下げ」になっていないので Keepa fallback に落ちる
+    const stats = {
+      avg: [3230, 3174, -1, -1, 4399],
+      min: [[100, 2473]] as Array<[number, number] | null>,
+    };
+    const result = pickReferencePrice(stats, 2903, 2903);
+    expect(result).toEqual({ price: 4399, source: 'list-price' });
+  });
+
+  it('savingBasis with Keepa all missing — savingBasis still wins', () => {
+    const stats = {
+      avg: [-1, -1, -1, -1, -1],
+      min: [null] as Array<[number, number] | null>,
+    };
+    const result = pickReferencePrice(stats, 1080, 1490);
+    expect(result).toEqual({ price: 1490, source: 'paapi-saving-basis' });
+  });
+
+  it('B07B5CD8NY scenario: Keepa fallback yields ~1% drop, savingBasis recovers a real drop', () => {
+    // 実 Phase A データ: current=1080, avg=[971, 1094, -1, -1, -1], min=[[t,562],[t,45],...]
+    // Keepa fallback だけだと new-avg 1094 → 1.3% で閾値未満。
+    // savingBasis (Amazon UI 定価) 1490 を渡すと paapi-saving-basis 優先で 27.5% drop が得られる。
+    const stats = {
+      avg: [971, 1094, -1, -1, -1],
+      min: [[1, 562], [1, 45]] as Array<[number, number] | null>,
+    };
+    const result = pickReferencePrice(stats, 1080, 1490);
+    expect(result).toEqual({ price: 1490, source: 'paapi-saving-basis' });
+  });
 });
