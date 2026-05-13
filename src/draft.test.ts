@@ -13,6 +13,11 @@ const appendRunLogMock = vi.fn();
 const fetchFixedListingsMock = vi.fn();
 const dispatchMock = vi.fn();
 const appendHistoryMock = vi.fn();
+const collectBrandHitsMock = vi.fn();
+
+vi.mock('./brand-watch.js', () => ({
+  collectBrandHits: (...args: unknown[]) => collectBrandHitsMock(...args),
+}));
 
 vi.mock('./keepa.js', () => ({
   getDeals: (...args: unknown[]) => getDealsMock(...args),
@@ -78,6 +83,7 @@ const resetAllMocks = () => {
   fetchFixedListingsMock.mockReset();
   dispatchMock.mockReset();
   appendHistoryMock.mockReset();
+  collectBrandHitsMock.mockReset();
 
   // sane defaults: tokensLeft は null にして「設定無し」を示す
   // (各 test が個別カテゴリで mockImplementation すれば、その値が lastTokensLeft に反映される)
@@ -94,6 +100,8 @@ const resetAllMocks = () => {
   // 投稿成功シナリオの test 内で dispatchMock.mockResolvedValueOnce({...}) を上書きする。
   dispatchMock.mockResolvedValue({ x: { ok: false }, bluesky: { ok: false } });
   appendHistoryMock.mockResolvedValue(undefined);
+  // brand 経路 default: 空配列 (個別 test で brand Candidate を返したい場合は上書きする)。
+  collectBrandHitsMock.mockResolvedValue([]);
 };
 
 // title はデフォルトで food whitelist (`国産|日本産|日本製`) を通すようにしている。

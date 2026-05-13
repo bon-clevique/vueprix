@@ -2,6 +2,7 @@ import 'dotenv/config';
 import { randomBytes } from 'node:crypto';
 import { buildAffiliateUrl, requirePartnerTag } from './affiliate.js';
 import { loadBlocklist } from './blocklist.js';
+import { collectBrandHits } from './brand-watch.js';
 import { CATEGORY_FIXED, mapKeepaCategoryToNotion, type NotionCategory } from './category.js';
 import {
   CATEGORY_QUOTA,
@@ -54,7 +55,7 @@ export interface Candidate {
   currentPrice: number;
   referencePrice: number;
   dropPercent: number;
-  source: 'deals' | 'fixed';
+  source: 'deals' | 'fixed' | 'brand';
   category: NotionCategory;
 }
 
@@ -420,9 +421,11 @@ export const main = async (): Promise<void> => {
     tokensLeft = lastTokensLeft;
     dealsTotal = dealCandidates.length;
     const fixedCandidates = await collectFixed();
+    const brandCandidates = await collectBrandHits();
     logger.info('draft', 'candidates collected', {
       deals: dealCandidates.length,
       fixed: fixedCandidates.length,
+      brand: brandCandidates.length,
     });
 
     // fixed は Notion AI 経路を介さず Keepa 値下げ検知 → composeFixedPostText → X/Bluesky 即投稿 →
@@ -432,17 +435,27 @@ export const main = async (): Promise<void> => {
       .filter((c) => !activeAsins.has(c.asin));
     const fixedPostedCount = await publishFixedCandidates(fixedFiltered, partnerTag, runId);
 
-    // deals 経路のみが従来通り createDraftPage (status=backlog) に進む。
-    const afterBlocklist = dealCandidates.filter((c) => !blocklist.has(c.asin));
-    const filtered = filterByActiveAsins(afterBlocklist, activeAsins);
-    const dealTargets = selectByQuota(filtered);
-    // safety cap (PA-API / Notion 連打抑制)。固定ASIN の即投稿分は別カウントなので cap 対象外。
-    const targets = dealTargets.slice(0, MAX_POSTS_PER_RUN);
+    // deals 経路: blocklist + activeAsins フィルタ → selectByQuota (CATEGORY_QUOTA 枠管理)。
+    const dealsAfterBlocklist = dealCandidates.filter((c) => !blocklist.has(c.asin));
+    const dealsAfterActive = filterByActiveAsins(dealsAfterBlocklist, activeAsins);
+    const dealTargets = selectByQuota(dealsAfterActive);
+
+    // brand 経路: 同じ blocklist + activeAsins フィルタを通すが、selectByQuota は通さない。
+    // brand-watch.ts 内で既に BRAND_QUOTA=2/brand で絞り済み (= 最大 6 件)。
+    // CATEGORY_QUOTA とは独立した枠として targets に合流させる (Spec §6.X "BRAND_QUOTA 分離")。
+    const brandAfterBlocklist = brandCandidates.filter((c) => !blocklist.has(c.asin));
+    const brandAfterActive = filterByActiveAsins(brandAfterBlocklist, activeAsins);
+
+    // 最終 targets = deals (CATEGORY_QUOTA 枠) + brand (BRAND_QUOTA 枠、独立)。
+    // MAX_POSTS_PER_RUN=30 cap で全体上限を担保 (PA-API / Notion 連打抑制)。
+    // 固定ASIN の即投稿分は別カウントなので cap 対象外。
+    const targets = [...dealTargets, ...brandAfterActive].slice(0, MAX_POSTS_PER_RUN);
     targetsCount = targets.length;
     logger.info('draft', 'targets selected', {
-      dealsAfterBlocklist: afterBlocklist.length,
-      dealsAfterActive: filtered.length,
+      dealsAfterBlocklist: dealsAfterBlocklist.length,
+      dealsAfterActive: dealsAfterActive.length,
       dealTargets: dealTargets.length,
+      brandAfterActive: brandAfterActive.length,
       fixedPosted: fixedPostedCount,
       willDraft: targets.length,
     });

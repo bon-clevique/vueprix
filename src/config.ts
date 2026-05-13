@@ -74,3 +74,20 @@ export const POST_HISTORY_PATH = "data/post-history.jsonl";
 // queryDuplicateAsins の Notion paging 上限。
 // page_size=100 × MAX_QUERY_PAGES = 1000 件。到達時は warn ログ + 切り上げ (要拡張シグナル)。
 export const MAX_QUERY_PAGES = 10;
+
+// Brand watch 経路の設定 (Spec docs/specs/brand-watch.html §6.X 参照)。
+// dry-run (scripts/verify-keepa-brand.ts) で確定した表記。漢字表記は Keepa の brand index に
+// 載っておらず英語表記のみ hit する (例: 山﨑実業 → "Yamazaki" 50 hits、"山崎実業"/"山﨑実業" は 0)。
+export const WATCH_BRANDS: readonly string[] = [
+  'Yamazaki',  // 山﨑実業 (tower シリーズ等)
+  'KAI',       // 貝印 (関孫六 等)
+  'HARIO',     // HARIO (V60 等)
+];
+
+// brand あたりの 1 run 採用上限。CATEGORY_QUOTA とは独立枠 (deals 経路を圧迫しない)。
+// 3 brand × 2 件 = 6 件/run。MAX_POSTS_PER_RUN=30 に十分収まる。
+export const BRAND_QUOTA = 2;
+
+// Keepa Product Finder (/query) で要求する values。perPage は max 50。
+// page 0 のみ (page 1-9 は要望次第)。
+export const BRAND_PAGE_SIZE = 50;
