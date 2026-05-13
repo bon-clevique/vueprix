@@ -126,7 +126,9 @@ export interface DraftPayload {
 //   30s に短縮して 1 attempt の失敗を早く検知 → retry に回す。
 // - retry: default は maxRetries=2 だが、本 repo では timeout/5xx での fatal exit を防ぐため 3 attempts に上げる
 //   (1s → 2s → 4s の指数バックオフ、合計遅延 ~7s)。
-const buildClient = (): Client =>
+// notion.ts 内部 + 他 module (fixed-templates.ts 等) から共通利用するため export する。
+// retry policy / timeout の単一管理を保つことで bug 源 (policy drift) を防ぐ。
+export const buildClient = (): Client =>
   new Client({
     auth: process.env.NOTION_API_KEY,
     notionVersion: '2026-03-11',
@@ -146,41 +148,93 @@ interface NotionSelectOption {
   name?: string;
 }
 
+// createDraftPage / createPostedPage 共通の properties (Status と 投稿日時 以外) を構築する。
+// Status と 投稿日時 は呼び出し側で個別にマージする。
+const buildBaseProperties = (draft: DraftCandidate): Record<string, unknown> => {
+  const relations = (draft.guidelineRelations ?? []).map((id) => ({ id }));
+  return {
+    '名前': {
+      title: [{ type: 'text', text: { content: truncate(draft.title, 200) } }],
+    },
+    ASIN: {
+      rich_text: [{ type: 'text', text: { content: draft.asin } }],
+    },
+    '投稿文': {
+      rich_text: [{ type: 'text', text: { content: truncate(draft.postText) } }],
+    },
+    'Amazon URL': draft.amazonUrl ? { url: draft.amazonUrl } : { url: null },
+    '通常価格': { number: draft.referencePrice },
+    'セール価格': { number: draft.currentPrice },
+    '割引率': { number: draft.dropPercent / 100 },
+    'カテゴリ': { select: { name: draft.category } },
+    'サクラチェッカーURL': { url: buildSakuraCheckerUrl(draft.asin) },
+    '候補生成日時': { date: { start: draft.generatedAt.toISOString() } },
+    ...(relations.length > 0 ? { '関連ガイドライン': { relation: relations } } : {}),
+  };
+};
+
+// links に含まれる X / Bluesky URL を bookmark block として page 末尾に append する。
+// updateStatusToPosted / createPostedPage の両方から呼ばれる共通ロジック。
+const appendPostBookmarks = async (
+  client: Client,
+  pageId: string,
+  links: PostedLinks,
+): Promise<number> => {
+  const bookmarks: Array<{ object: 'block'; type: 'bookmark'; bookmark: { url: string } }> = [];
+  if (links.x) bookmarks.push({ object: 'block', type: 'bookmark', bookmark: { url: links.x } });
+  if (links.bluesky) bookmarks.push({ object: 'block', type: 'bookmark', bookmark: { url: links.bluesky } });
+  if (bookmarks.length === 0) return 0;
+  await client.blocks.children.append({ block_id: pageId, children: bookmarks });
+  return bookmarks.length;
+};
+
 // Status=backlog として candidate を 1 page 作成。page id を返す。
 // approval workflow の起点。Notion automation が Status=approved に変更すると repository_dispatch が発火する。
 export const createDraftPage = async (draft: DraftCandidate): Promise<string> => {
   const dataSourceId = requireConfigured();
   const client = buildClient();
-  const relations = (draft.guidelineRelations ?? []).map((id) => ({ id }));
   const res = await client.pages.create({
     // Notion API v2026-03-11 では parent は data_source_id を指定する。
     // (環境変数名は NOTION_VUEPRIX_DATA_SOURCE_ID で、値は data source UUID)
     parent: { type: 'data_source_id', data_source_id: dataSourceId },
     properties: {
-      '名前': {
-        title: [{ type: 'text', text: { content: truncate(draft.title, 200) } }],
-      },
-      ASIN: {
-        rich_text: [{ type: 'text', text: { content: draft.asin } }],
-      },
-      '投稿文': {
-        rich_text: [{ type: 'text', text: { content: truncate(draft.postText) } }],
-      },
-      'Amazon URL': draft.amazonUrl ? { url: draft.amazonUrl } : { url: null },
-      '通常価格': { number: draft.referencePrice },
-      'セール価格': { number: draft.currentPrice },
-      '割引率': { number: draft.dropPercent / 100 },
-      'カテゴリ': { select: { name: draft.category } },
-      'サクラチェッカーURL': { url: buildSakuraCheckerUrl(draft.asin) },
-      '候補生成日時': { date: { start: draft.generatedAt.toISOString() } },
+      ...buildBaseProperties(draft),
       // Status は Notion 側で「status」type (PR-8 で select から変更)。書き込み形式も `status: { name }`。
       // 初期値は backlog (bon が後で doing に手動遷移 → 投稿文 を Notion AI で生成 → approved)。
       Status: { status: { name: STATUS.BACKLOG } },
-      ...(relations.length > 0 ? { '関連ガイドライン': { relation: relations } } : {}),
     },
   });
   const pageId = (res as { id: string }).id;
   logger.info('notion', 'draft page created', { asin: draft.asin, pageId, category: draft.category });
+  return pageId;
+};
+
+// Notion AI 承認フローを介さず X/Bluesky に即時投稿された候補を、Status=posted で 1 page 作成する。
+// 固定ASIN (FIXED_ASINS) の直接投稿フロー専用。draft.postText には実際に投稿された最終文を渡す。
+// 投稿後の bookmark append まで本 fn が担当 — 呼び出し側で updateStatusToPosted を続けて呼ぶ必要はない。
+export const createPostedPage = async (
+  draft: DraftCandidate,
+  postedAt: Date,
+  links: PostedLinks = {},
+): Promise<string> => {
+  const dataSourceId = requireConfigured();
+  const client = buildClient();
+  const res = await client.pages.create({
+    parent: { type: 'data_source_id', data_source_id: dataSourceId },
+    properties: {
+      ...buildBaseProperties(draft),
+      Status: { status: { name: STATUS.POSTED } },
+      '投稿日時': { date: { start: postedAt.toISOString() } },
+    },
+  });
+  const pageId = (res as { id: string }).id;
+  const bookmarkCount = await appendPostBookmarks(client, pageId, links);
+  logger.info('notion', 'posted page created', {
+    asin: draft.asin,
+    pageId,
+    category: draft.category,
+    bookmarks: bookmarkCount,
+  });
   return pageId;
 };
 
@@ -202,17 +256,10 @@ export const updateStatusToPosted = async (
       '投稿日時': { date: { start: postedAt.toISOString() } },
     },
   });
-
-  const bookmarks: Array<{ object: 'block'; type: 'bookmark'; bookmark: { url: string } }> = [];
-  if (links.x) bookmarks.push({ object: 'block', type: 'bookmark', bookmark: { url: links.x } });
-  if (links.bluesky) bookmarks.push({ object: 'block', type: 'bookmark', bookmark: { url: links.bluesky } });
-  if (bookmarks.length > 0) {
-    await client.blocks.children.append({ block_id: pageId, children: bookmarks });
-  }
-
+  const bookmarkCount = await appendPostBookmarks(client, pageId, links);
   logger.info('notion', 'status updated to posted', {
     pageId,
-    bookmarks: bookmarks.length,
+    bookmarks: bookmarkCount,
   });
 };
 
