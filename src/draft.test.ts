@@ -890,6 +890,105 @@ describe('draft.main integration', () => {
     const draftArg = createDraftPageMock.mock.calls[0]?.[0] as { postText: string };
     expect(draftArg.postText).toBe('');
   });
+
+  // PR-#47: deals/brand 経路の draft は amazonUrl=null で作成し、bon がサクラチェッカー +
+  // Amazon で affiliate 短縮リンクを取得して手動入力する運用に統一する。
+  it('createDraftPage receives amazonUrl=null for deals path (manual fill-in workflow)', async () => {
+    getDealsMock.mockImplementation((categoryId: number) => {
+      if (categoryId === 57239051) {
+        return Promise.resolve(dealsResult([buildDeal({ asin: 'B000DEAL', title: '国産 商品' })]));
+      }
+      return Promise.resolve(dealsResult([]));
+    });
+
+    const { main } = await import('./draft.js');
+    await main();
+
+    expect(createDraftPageMock).toHaveBeenCalledTimes(1);
+    const draftArg = createDraftPageMock.mock.calls[0]?.[0] as { asin: string; amazonUrl: string | null };
+    expect(draftArg.asin).toBe('B000DEAL');
+    expect(draftArg.amazonUrl).toBeNull();
+  });
+
+  // PR-#47: 固定ASIN DB に bon が入力した短縮リンク (amzn.to/...) を SNS 投稿 + Notion 記録の双方で使う。
+  it('fixed-direct uses listing.amazonUrl (short link) when present, in both SNS post and createPostedPage', async () => {
+    checkAsinMock.mockImplementation((asin: string) => {
+      if (asin === 'B0C1JGD2T6') {
+        return Promise.resolve({
+          asin,
+          title: 'カリタ コーヒーフィルター',
+          currentPrice: 800,
+          referencePrice: 1000,
+          referenceSource: 'list-price' as const,
+          dropPercent: 20,
+        });
+      }
+      return Promise.resolve(null);
+    });
+    fetchFixedListingsMock.mockResolvedValue(
+      new Map<string, FixedListing>([
+        [
+          'B0C1JGD2T6',
+          {
+            description: 'カリタの定番フィルター。',
+            amazonUrl: 'https://amzn.to/short-link-abc',
+          },
+        ],
+      ]),
+    );
+    dispatchMock.mockResolvedValue({
+      x: { ok: true, url: 'https://x.com/post/1' },
+      bluesky: { ok: true, url: 'https://bsky.app/post/1' },
+    });
+
+    const { main } = await import('./draft.js');
+    await main();
+
+    expect(dispatchMock).toHaveBeenCalledTimes(1);
+    const dispatchInput = dispatchMock.mock.calls[0]?.[1] as { text: string };
+    expect(dispatchInput.text).toContain('https://amzn.to/short-link-abc');
+    expect(dispatchInput.text).not.toContain('?tag=');
+
+    expect(createPostedPageMock).toHaveBeenCalledTimes(1);
+    const postedArg = createPostedPageMock.mock.calls[0]?.[0] as { amazonUrl: string | null };
+    expect(postedArg.amazonUrl).toBe('https://amzn.to/short-link-abc');
+  });
+
+  // PR-#47: 固定ASIN DB に Amazon URL 未設定の場合は buildAffiliateUrl の generic URL に fallback。
+  // SNS 投稿 break 防止のための defense (運用上は bon が短縮リンクを必ず入れる前提)。
+  it('fixed-direct falls back to buildAffiliateUrl when listing.amazonUrl is undefined', async () => {
+    checkAsinMock.mockImplementation((asin: string) => {
+      if (asin === 'B0C1JGD2T6') {
+        return Promise.resolve({
+          asin,
+          title: 'カリタ コーヒーフィルター',
+          currentPrice: 800,
+          referencePrice: 1000,
+          referenceSource: 'list-price' as const,
+          dropPercent: 20,
+        });
+      }
+      return Promise.resolve(null);
+    });
+    fetchFixedListingsMock.mockResolvedValue(
+      new Map<string, FixedListing>([
+        ['B0C1JGD2T6', { description: 'カリタの定番フィルター。' }],  // amazonUrl 未設定
+      ]),
+    );
+    dispatchMock.mockResolvedValue({
+      x: { ok: true, url: 'https://x.com/post/1' },
+      bluesky: { ok: true, url: 'https://bsky.app/post/1' },
+    });
+
+    const { main } = await import('./draft.js');
+    await main();
+
+    const dispatchInput = dispatchMock.mock.calls[0]?.[1] as { text: string };
+    expect(dispatchInput.text).toContain('https://www.amazon.co.jp/dp/B0C1JGD2T6?tag=test-tag-22');
+
+    const postedArg = createPostedPageMock.mock.calls[0]?.[0] as { amazonUrl: string | null };
+    expect(postedArg.amazonUrl).toBe('https://www.amazon.co.jp/dp/B0C1JGD2T6?tag=test-tag-22');
+  });
 });
 
 describe('draft.main run-log integration', () => {
