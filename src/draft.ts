@@ -272,7 +272,9 @@ const publishFixedCandidates = async (
       });
       continue;
     }
-    const affiliateUrl = buildAffiliateUrl(c.asin, partnerTag);
+    // 固定ASIN DB に bon が手動入力した短縮リンク (amzn.to/...) を最優先で採用。
+    // 未設定なら buildAffiliateUrl による generic な dp/?tag= URL に fallback して SNS 投稿が break しないよう defense。
+    const affiliateUrl = listing.amazonUrl ?? buildAffiliateUrl(c.asin, partnerTag);
     const composed = composeFixedPostText(
       description,
       dropPercent,
@@ -481,11 +483,15 @@ export const main = async (): Promise<void> => {
         const product = paapiByAsin.get(target.asin) ?? buildKeepaProduct(target, partnerTag);
         // postText は Notion AI で生成する運用に移行したため、ドラフト作成時は空文字列で初期化する。
         // Notion 上で人が文言を埋めてから approved に遷移させる。空のまま approved にすると publish が refuse する。
+        //
+        // Amazon URL は null で初期化 (PR-#47)。運用上、bon が サクラチェッカー → Amazon で商品確認の上
+        // affiliate 短縮リンクを取得して手動入力する。null にしておくことで「未対応」のセルが視覚的に分かる。
+        // 固定ASIN は本ループに来ない (publishFixedCandidates で別経路) ため null で問題なし。
         const draft: DraftCandidate = {
           asin: target.asin,
           title: product.title,
           postText: '',
-          amazonUrl: buildAffiliateUrl(target.asin, partnerTag),
+          amazonUrl: null,
           currentPrice: product.currentPrice,
           referencePrice: target.referencePrice,
           dropPercent: target.dropPercent,

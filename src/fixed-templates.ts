@@ -31,10 +31,13 @@ interface NotionDataSourceQueryResult {
 }
 
 // 1 件の固定ASIN が保持する情報。description は必須 (空なら fetch 段階で skip)、
-// manualReferencePrice は optional (未設定/0/負値の場合 undefined)。
+// manualReferencePrice / amazonUrl は optional。
+// amazonUrl は bon が手動で入力した affiliate 短縮リンク (例: https://amzn.to/xxx)。
+// 投稿文 DB の Amazon URL プロパティへ転記する用途で保持する (PR-#47 で導入)。
 export interface FixedListing {
   description: string;
   manualReferencePrice?: number;
+  amazonUrl?: string;
 }
 
 const extractTitleText = (prop: unknown): string => {
@@ -57,6 +60,19 @@ const extractNumber = (prop: unknown): number | null => {
   // typeof NaN === 'number' を通さないよう Number.isFinite で defense-in-depth する。
   // Notion API は number column に NaN を返さない想定だが、想定外入力で投稿文に NaN が混入する事故を防ぐ。
   return typeof n === 'number' && Number.isFinite(n) ? n : null;
+};
+
+// Notion URL property を厳格に検証して返す。前後 whitespace は trim、http(s) 以外は reject。
+// Notion UI は URL field でも任意 string を受け入れるため (旧投稿文の coast → 誤入力で
+// `javascript:...` や plain text が混入する事故を防ぐ defense-in-depth)。
+const extractUrl = (prop: unknown): string | null => {
+  if (!prop || typeof prop !== 'object') return null;
+  const raw = (prop as { url?: string | null }).url;
+  if (typeof raw !== 'string') return null;
+  const trimmed = raw.trim();
+  if (!trimmed) return null;
+  if (!trimmed.startsWith('https://') && !trimmed.startsWith('http://')) return null;
+  return trimmed;
 };
 
 const isConfigured = (): boolean =>
@@ -93,7 +109,8 @@ export const fetchFixedListings = async (): Promise<Map<string, FixedListing>> =
       const rawNumber = extractNumber(props['参考定価']);
       const manualReferencePrice =
         rawNumber !== null && rawNumber > 0 ? rawNumber : undefined;
-      map.set(asin, { description, manualReferencePrice });
+      const amazonUrl = extractUrl(props['Amazon URL']) ?? undefined;
+      map.set(asin, { description, manualReferencePrice, amazonUrl });
     }
     if (!res.has_more || !res.next_cursor) break;
     cursor = res.next_cursor;
