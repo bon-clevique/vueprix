@@ -1,0 +1,568 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <title>Spec: brand-watch</title>
+  <script type="module">
+    import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.esm.min.mjs';
+    mermaid.initialize({ startOnLoad: true, theme: 'default' });
+  </script>
+  <style>
+    :root {
+      --bg-primary: #0a1020;
+      --bg-surface: #121a30;
+      --bg-surface-alt: #1a2440;
+      --border: #2a3550;
+      --text-primary: #e8eaf0;
+      --text-secondary: #b8bccc;
+      --text-tertiary: #8a9aab;
+      --accent-ember: #ff8c42;
+      --risk-high: #ff5a6e;
+      --risk-med: #ffb547;
+      --risk-low: #8a9aab;
+    }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      margin: 0;
+      padding: 0;
+      line-height: 1.6;
+      color: var(--text-primary);
+      background: var(--bg-primary);
+    }
+    h1 { border-bottom: 2px solid var(--accent-ember); padding-bottom: 0.3em; color: var(--text-primary); }
+    h2 { color: var(--text-primary); margin-top: 1.8em; border-left: 4px solid var(--accent-ember); padding-left: 0.5em; }
+    h3 { color: var(--text-secondary); }
+    a { color: var(--accent-ember); }
+    code { background: var(--bg-surface-alt); padding: 0.1em 0.4em; border-radius: 3px; font-size: 0.9em; color: var(--text-primary); }
+    pre { background: var(--bg-surface-alt); padding: 1em; border-radius: 5px; overflow-x: auto; color: var(--text-primary); }
+    pre code { background: transparent; padding: 0; }
+    blockquote { border-left: 3px solid var(--accent-ember); padding-left: 1em; color: var(--text-secondary); font-style: italic; }
+
+    .layout {
+      display: flex;
+      flex-direction: column;
+      max-width: 1100px;
+      margin: 0 auto;
+      padding: 0;
+    }
+    .toc {
+      position: sticky;
+      top: 0;
+      z-index: 100;
+      border-bottom: 1px solid var(--border);
+      padding: 1rem 3rem;
+      margin: 0;
+      backdrop-filter: blur(8px);
+      background: rgba(10, 16, 32, 0.85);
+    }
+    .toc-inner {
+      max-width: 1100px;
+      margin: 0 auto;
+      display: flex;
+      gap: 0;
+      flex-wrap: wrap;
+      align-items: stretch;
+    }
+    .toc a {
+      display: inline-flex;
+      align-items: center;
+      padding: 0.6em 1.1em;
+      border: none;
+      border-bottom: 2px solid transparent;
+      background: transparent;
+      color: var(--text-tertiary);
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.8rem;
+      text-decoration: none;
+      transition: all 0.15s;
+      margin-right: 0;
+    }
+    .toc a:hover {
+      color: var(--text-primary);
+      border-bottom-color: var(--accent-ember);
+      background: rgba(255, 140, 66, 0.05);
+    }
+    .toc a.active {
+      color: var(--accent-ember);
+      border-bottom-color: var(--accent-ember);
+    }
+    .content {
+      padding: 3rem;
+      max-width: 1100px;
+      margin: 0 auto;
+    }
+
+    dl.glossary {
+      background: var(--bg-surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 1em 1.5em;
+      margin: 1em 0;
+    }
+    dl.glossary dt {
+      font-family: 'JetBrains Mono', monospace;
+      font-weight: 700;
+      color: var(--accent-ember);
+      margin-top: 0.75em;
+    }
+    dl.glossary dt:first-child { margin-top: 0; }
+    dl.glossary dd {
+      margin: 0.25em 0 0 0;
+      color: var(--text-secondary);
+    }
+
+    .da-block {
+      background: var(--bg-surface-alt);
+      border: 1px solid var(--border);
+      border-left: 3px solid var(--accent-ember);
+      border-radius: 8px;
+      padding: 1.25em 1.5em;
+      margin: 1em 0;
+    }
+    .da-block h3 {
+      margin-top: 0;
+      margin-bottom: 0.5em;
+      font-size: 1rem;
+      color: var(--text-primary);
+    }
+    .da-block p {
+      margin: 0;
+      color: var(--text-secondary);
+    }
+
+    .risk-card {
+      background: var(--bg-surface);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 1.25em 1.5em;
+      margin: 1em 0;
+    }
+    .risk-card-header {
+      display: flex;
+      align-items: center;
+      gap: 0.75em;
+      margin-bottom: 0.75em;
+      padding-bottom: 0.75em;
+      border-bottom: 1px solid var(--border);
+    }
+    .risk-card-title {
+      font-weight: 600;
+      color: var(--text-primary);
+    }
+    .risk-badge {
+      display: inline-block;
+      padding: 0.15em 0.7em;
+      border-radius: 999px;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.7rem;
+      font-weight: 700;
+      letter-spacing: 0.05em;
+    }
+    .risk-badge.risk-high { background: rgba(255,90,110,0.15); color: var(--risk-high); border: 1px solid rgba(255,90,110,0.3); }
+    .risk-badge.risk-med  { background: rgba(255,181,71,0.15); color: var(--risk-med); border: 1px solid rgba(255,181,71,0.3); }
+    .risk-badge.risk-low  { background: rgba(138,154,171,0.15); color: var(--risk-low); border: 1px solid rgba(138,154,171,0.3); }
+    .risk-card-body { margin: 0; }
+    .risk-card-body dt {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.75rem;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: var(--text-tertiary);
+      margin-top: 0.75em;
+    }
+    .risk-card-body dt:first-child { margin-top: 0; }
+    .risk-card-body dd {
+      margin: 0.25em 0 0 0;
+      color: var(--text-secondary);
+    }
+
+    section.card {
+      margin-bottom: 2em;
+    }
+  </style>
+</head>
+<body>
+  <div class="layout">
+    <nav class="toc">
+      <div class="toc-inner">
+        <a href="#s1">01 Context</a>
+        <a href="#s1-5">1.5 Glossary</a>
+        <a href="#s2">02 Goal</a>
+        <a href="#s2-5">2.5 Big Picture</a>
+        <a href="#s3">03 Non-Goal</a>
+        <a href="#s4">04 Acceptance</a>
+        <a href="#s5">05 DA</a>
+        <a href="#s6">06 Design</a>
+        <a href="#s7">07 Risks</a>
+        <a href="#s8">08 OoS</a>
+      </div>
+    </nav>
+    <main class="content">
+      <h1>Spec: brand-watch</h1>
+
+      <p><em>vueprix bot に「ブランド指定ウォッチ」経路を追加する設計。初期ターゲットは <strong>山﨑実業 / 貝印 / HARIO</strong> の 3 ブランド。Keepa Pro €29/月の予算内で完結、追加課金ゼロ。</em></p>
+
+      <section class="card" id="s1">
+        <h2>1. Context (背景)</h2>
+        <p>現状 vueprix bot は以下 2 経路で値下げ商品を検知する:</p>
+        <ul>
+          <li><strong>Keepa Deals 経路</strong>: 7 カテゴリ (food / health / kitchen / stationery / pc-desk / audio / gaming) を <code>/deal</code> API で巡回</li>
+          <li><strong>固定 ASIN 経路</strong>: <code>FIXED_ASINS</code> に列挙した 9 件を <code>/product</code> API で個別チェック</li>
+        </ul>
+        <p>カテゴリ巡回は「テーマフィット」「価格帯」「title 白リスト」でフィルタするが、<strong>特定ブランドの製品だけを追跡する手段がない</strong>。bon が「山﨑実業 (tower シリーズ)」「貝印 (関孫六 等)」「HARIO (V60 等)」のような信頼ブランドの値下げを継続的に拾いたいと判断したため、ブランド軸の検知経路を追加する。</p>
+        <p>調査の結果、Keepa Product Finder API (<code>/query</code>) は公式に <code>brand</code> と <code>manufacturer</code> フィールドを持ち (`keepacom/api_backend` の <code>ProductFinderRequest.java</code> で確認済)、最大 50 個までの OR 検索が可能。トークン消費は現状 10% 程度のため、3 ブランド追加しても予算余裕大。</p>
+      </section>
+
+      <section class="card" id="s1-5">
+        <h2>1.5 Glossary</h2>
+        <dl class="glossary">
+          <dt>Product Finder (<code>/query</code>)</dt>
+          <dd>Keepa の検索 API。任意フィルタ (brand / manufacturer / 価格範囲 / sales rank 等) で ASIN を絞り込み、ページング (page 0-9, perPage ≤ 50) で取得する。<code>asinsOnly=true</code> で ASIN のみ取得が可能。</dd>
+          <dt>Deals (<code>/deal</code>)</dt>
+          <dd>既存使用。カテゴリ ID を指定して値下げ商品リストを取得。1 call ≈ 50 トークン。</dd>
+          <dt>SavingBasis</dt>
+          <dd>PA-API GetItems の <code>Offers.Listings[0].SavingBasis.Amount</code>。Amazon UI の打消し線価格 (定価)。固定 ASIN 経路で reference price 最優先採用。</dd>
+          <dt>CATEGORY_QUOTA</dt>
+          <dd>カテゴリ別の 1 run あたり draft 上限 (現状合計 20)。Brand 経路は別 quota <code>BRAND_QUOTA</code> で独立管理し、既存枠を圧迫しない設計。</dd>
+          <dt>Token Budget</dt>
+          <dd>Keepa Pro: 1 トークン/分 × 60 × 24 = 43,200 トークン/日。現状 4,308/日 (10%) 消費。Brand 追加で +360/日 (合計 11%) を見込む。</dd>
+        </dl>
+      </section>
+
+      <section class="card" id="s2">
+        <h2>2. Goal</h2>
+        <p>GitHub Actions cron が 2 時間おきに走るたびに、<strong>山﨑実業 / 貝印 / HARIO の各ブランドで 15% 以上値下げしている ASIN</strong> を Keepa <code>/query</code> で検出し、既存の Deals 経路と独立した <code>BRAND_QUOTA</code> 枠 (例: 各ブランド 2 件 = 計 6 件/run) に基づいて Notion DB に <code>Status=backlog</code> で投入する。</p>
+        <p>固定 ASIN と異なり brand hits は数百〜数千件の候補から選別するため、<strong>title-whitelist は適用せず</strong> (ブランド指定時点でテーマフィット済)、dropPercent 降順で上位 N 件のみ採用する。月額課金は <strong>変動なし (€29/月)</strong>。</p>
+      </section>
+
+      <section class="card" id="s2-5">
+        <h2>2.5 Goal 達成後の全体像 (Big Picture)</h2>
+        <p><em>Goal 達成後、c2 を使って本機能を継続改善する際の運用フロー。</em></p>
+
+        <h3>2.5.1 Flow A: ブランド追加 / 削除</h3>
+        <p><em>bon が新ブランドを追加したくなった場合の運用フロー。</em></p>
+        <pre class="mermaid">
+sequenceDiagram
+    autonumber
+    actor Bon
+    participant Main as c2 (main)
+    participant Verify as verify-keepa-brand.ts
+    participant Keepa as Keepa /query
+    participant Config as src/config.ts
+
+    Bon->>Main: ブランド「象印」を追加したい
+    Main->>Verify: dry-run 表記候補 ["象印", "Zojirushi"]
+    Verify->>Keepa: brand=[...] で hit 数確認
+    Keepa-->>Verify: ASIN count + sample
+    Verify-->>Main: 表記正解の報告
+    Main->>Config: WATCH_BRANDS に append
+    Main-->>Bon: PR 作成依頼
+        </pre>
+
+        <h3>2.5.2 Flow B: cron 1 run の実行</h3>
+        <p><em>GitHub Actions cron が 2 時間おきに自動実行する流れ。</em></p>
+        <pre class="mermaid">
+sequenceDiagram
+    autonumber
+    participant Cron as GitHub Actions
+    participant Draft as draft.ts main()
+    participant Brand as brand-watch.ts
+    participant Keepa as Keepa API
+    participant Notion as Notion DB
+
+    Cron->>Draft: 2h cron 起動
+    Draft->>Brand: collectBrandHits()
+    Brand->>Keepa: /query brand=[山崎実業,貝印,HARIO]
+    Keepa-->>Brand: ASIN list (asinsOnly)
+    Brand->>Keepa: /product 個別 stats fetch
+    Keepa-->>Brand: stats / reference
+    Brand-->>Draft: Candidate[] (source='brand')
+    Draft->>Notion: createDraftPage (Status=backlog)
+        </pre>
+
+        <h3>2.5.3 Flow C: 投稿 〜 publish</h3>
+        <p><em>Notion AI で文言生成 → bon 承認 → SNS 投稿の既存フローに合流。</em></p>
+        <pre class="mermaid">
+sequenceDiagram
+    autonumber
+    actor Bon
+    participant Notion as Notion DB
+    participant Publish as bot-publish.yml
+    participant SNS as X / Bluesky
+
+    Bon->>Notion: postText 編集 + Status=approved
+    Notion->>Publish: repository_dispatch
+    Publish->>SNS: post
+    Publish->>Notion: Status=posted + URL 記録
+        </pre>
+
+        <h3>2.5.X 規律の責務分担</h3>
+        <ul>
+          <li><strong>Bon (user)</strong>: ブランド追加判断 / Notion AI で投稿文編集 / Status=approved 遷移</li>
+          <li><strong>c2 main</strong>: ブランド検証スクリプトの実装 / config 追加 PR / dry-run 結果確認</li>
+          <li><strong>brand-watch.ts</strong>: cron 内で <code>/query</code> 呼び出し + <code>checkAsin</code> 連携 + <code>BRAND_QUOTA</code> 枠選別</li>
+          <li><strong>既存 draft.ts</strong>: 経路統合 (deals/fixed/brand 3 経路の Candidate 集計と Notion 書き込み)</li>
+        </ul>
+      </section>
+
+      <section class="card" id="s3">
+        <h2>3. Non-Goal</h2>
+        <ul>
+          <li>Brand hits の <strong>即投稿 (固定 ASIN 経路相当)</strong>: 投稿文を Notion AI で生成する標準フロー (Status=backlog → approved) に揃える</li>
+          <li>SNS への投稿先追加 (Mastodon / Threads 等)</li>
+          <li>ブランド別 Notion カテゴリの新設 (既存 <code>kitchen</code> 等の category へ流す。new <code>brand-list</code> category は最小実装としては不要)</li>
+          <li>機械学習による「人気ブランド自動発見」 (運用で手動 curate)</li>
+          <li>Amazon ブランドストア API 連携 (Keepa Product Finder で十分)</li>
+          <li>brand 表記の自動正規化 (dry-run スクリプトで bon が手動確認する運用)</li>
+        </ul>
+      </section>
+
+      <section class="card" id="s4">
+        <h2>4. Acceptance Scenarios (Gherkin)</h2>
+
+        <h3>4.1 Scenario A1: 3 ブランドの値下げを検出して Notion へ投入</h3>
+        <pre><code>Scenario A1: brand-watch end-to-end via cron
+  Given KEEPA_API_KEY と NOTION_API_KEY が GitHub Actions secrets に設定済
+  And   WATCH_BRANDS=["山崎実業", "貝印", "HARIO"]
+  And   BRAND_QUOTA=2 (各ブランド)
+  When  cron `npm run draft` が走る
+  Then  Keepa /query が 1 回呼ばれる
+  And   各ブランドで 15% 以上値下げ ASIN が candidates に入る
+  And   Notion DB に最大 6 件 (3 × 2) の draft が Status=backlog で作成される
+  And   run-log にも brand 経路の件数が記録される</code></pre>
+
+        <h3>4.2 Scenario A2: brand hits が既存 Deals/Fixed と重複しない</h3>
+        <pre><code>Scenario A2: dedup with existing routes
+  Given 既存 deals 経路で ASIN=X が既に candidates に入っている
+  And   同じ ASIN=X が brand 経路でも hit する
+  When  draft.ts main() が走る
+  Then  Notion DB の queryDuplicateAsins / blocklist フィルタで重複が除去される
+  And   draft は 1 件のみ作成される (source 列は最初に検出した経路を記録)</code></pre>
+
+        <h3>4.3 Scenario A3: トークン予算内で完結</h3>
+        <pre><code>Scenario A3: token budget under 15% per day
+  Given 現状の Deals + Fixed で 4,308 token/day 消費 (10%)
+  When  Brand 経路を追加して 1 日 12 runs 走らせる
+  Then  Brand 経路の追加消費が 1 日 ≤ 500 token (1%)
+  And   合計 token 消費が ≤ 4,808/day (≤ 12%)
+  And   月額課金は変動なし (Keepa Pro €29 内)</code></pre>
+
+        <h3>4.4 Scenario A4: ブランド表記揺れの dry-run 検証</h3>
+        <pre><code>Scenario A4: brand name verification
+  Given verify-keepa-brand.ts スクリプトが存在する
+  When  `tsx scripts/verify-keepa-brand.ts "山崎実業" "Yamazaki"` を実行
+  Then  各表記の hit 数と sample title が標準出力に出る
+  And   hit 数 0 の表記は WATCH_BRANDS に含めない判断材料となる</code></pre>
+
+        <h3>4.5 Scenario A5: brand 経路が失敗しても他経路は止まらない</h3>
+        <pre><code>Scenario A5: failure isolation
+  Given Keepa /query が 5xx や timeout で失敗する
+  When  draft.ts main() が走る
+  Then  brand-watch の例外は warn ログのみで catch される
+  And   Deals 経路と Fixed 経路は通常通り完了する
+  And   run-log の status は 'partial' か 'success' (failure ではない)</code></pre>
+      </section>
+
+      <section class="card" id="s5">
+        <h2>5. Devil's Advocate</h2>
+
+        <div class="da-block">
+          <h3>5.1 前提は正しいか</h3>
+          <p>前提「特定ブランドの値下げを追えば収益率が上がる」は未検証。bon の主観 + 一般論 (信頼ブランドは転換率が高い) が根拠。<strong>本実装後 1 ヶ月で brand 経路の投稿転換率を Keepa Deals 経路と比較する KPI 検証を行う</strong> ことで前提検証する。検証が NG なら ADR-002 を起こして撤去判断する。</p>
+        </div>
+
+        <div class="da-block">
+          <h3>5.2 もっと簡単な代替案はあるか</h3>
+          <p><strong>代替案 C (Deals + title-filter)</strong>: 既存 <code>getDeals</code> 結果から title に「山崎実業 / Yamazaki / KAI / 貝印 / HARIO」を含む ASIN だけ拾う実装。コード追加 ~10 行、新 API 不要。短所: ブランド表記揺れ (山﨑/山崎/Yamazaki) に脆弱 + カテゴリ巡回内に限定。do-nothing 案: 固定 ASIN を bon が手動追加する (現状運用)。本 spec の方式 B (Product Finder) を採るのは「将来のブランド追加コストを 1 行 config 編集に下げる」ためで、初期 3 ブランドだけなら代替案 C で十分という反論あり。<strong>判断: B を採用、ただし Phase 1 では brand 経路の hit 件数を log に残して C との比較材料にする</strong>。</p>
+        </div>
+
+        <div class="da-block">
+          <h3>5.3 見落としているリスク・副作用</h3>
+          <p>(1) <strong>ブランドストア外品の混入</strong>: brand=山崎実業 で hit する商品に「山崎実業の OEM 互換品 (非公式)」が混じる可能性。Amazon の brand registry を Keepa がどこまで尊重するかは未検証 → Phase 1 で sample 100 件目視確認。(2) <strong>scope drift</strong>: 山﨑実業の主力は収納/雑貨で ADR-001 の「食・健康・生活の質」テーマからやや外れる。<strong>WATCH_BRANDS 追加は ADR 必須化</strong>の規律で防御。(3) <strong>title-whitelist スキップ</strong>: brand 経路は whitelist を通さないので、本来テーマ外の商品も流れ込みうる → Notion 手動承認で防御するが防御がガバいなら brand-specific title-deny-list を追加する。</p>
+        </div>
+
+        <div class="da-block">
+          <h3>5.4 ユーザー価値 (PM 視点)</h3>
+          <p>動く: cron で hit を取れる。使える: Notion AI で文言生成して投稿できる。使い続けられる: 月額固定 €29 で運用変動なし。<strong>本機能の真の価値は ADR-001 success criteria (月 ¥30-40k) に直接寄与するか</strong> で、bon の「信頼ブランドの転換率が高い」仮説が当たれば寄与する。仮説検証は Acceptance 後 1 ヶ月の brand 経路 vs deals 経路の click-through 比較で実施。</p>
+        </div>
+
+        <div class="da-block">
+          <h3>5.5 テスト戦略</h3>
+          <p>Unit test (vitest): <code>brand-watch.ts</code> の parseBrandHit / selectByBrandQuota / dedupe を mock Keepa response でカバー。Integration test: なし (Keepa API は live で叩く dry-run スクリプトで代替)。E2E sanity: <code>DRY_RUN=true</code> 相当の検証スクリプトを GitHub Actions 手動 dispatch で走らせて Notion 投入を観測。Manual sanity (non-blocking): 3 ブランドの sample 5 件を目視で「ブランド整合 + テーマ整合」を確認。</p>
+        </div>
+
+        <div class="da-block">
+          <h3>5.6 既存実装の削除候補はあるか? (zero-base review)</h3>
+          <p>削除候補なし。本機能は新規経路の追加で、既存 Deals / Fixed のロジックを置換しない。ただし、<strong>collectFixed / collectBrandHits / collectDeals の 3 関数で重複する Candidate 生成 + Notion 投入の共通化</strong> は今後の refactor 候補 (本 spec の scope 外、Plan の Out of Scope に記載)。今は KISS で 3 経路並列を維持。</p>
+        </div>
+      </section>
+
+      <section class="card" id="s6">
+        <h2>6. Design</h2>
+
+        <h3>6.1 Phase 1: brand 表記検証スクリプト</h3>
+        <p><em>WATCH_BRANDS に入れる表記を本実装前に確定するための dry-run ツール。</em></p>
+        <pre class="mermaid">
+sequenceDiagram
+    autonumber
+    participant Main as c2 (main)
+    participant Sub as code-author sub-agent
+    participant Script as scripts/verify-keepa-brand.ts
+    participant Keepa as Keepa /query
+
+    Main->>Sub: verify-keepa-brand.ts 新規作成依頼
+    Sub->>Script: argv parser + /query POST 実装
+    Script->>Keepa: brand=[argv...] asinsOnly=true
+    Keepa-->>Script: ASIN list + tokensLeft
+    Script-->>Sub: hit count / sample title 出力
+    Sub-->>Main: Phase 1 完了
+        </pre>
+
+        <h3>6.2 Phase 2: brand-watch.ts module</h3>
+        <p><em>cron 内で /query を叩き、既存 checkAsin と連携して Candidate を作る。</em></p>
+        <pre class="mermaid">
+sequenceDiagram
+    autonumber
+    participant Main as c2 (main)
+    participant Sub as code-author sub-agent
+    participant Module as src/brand-watch.ts
+    participant Config as src/config.ts
+    participant Keepa as Keepa API
+
+    Main->>Sub: brand-watch.ts + config 拡張依頼
+    Sub->>Config: WATCH_BRANDS / BRAND_QUOTA 追加
+    Sub->>Module: collectBrandHits() 実装
+    Module->>Keepa: /query brand=[...] asinsOnly=true
+    Keepa-->>Module: ASIN list
+    Module->>Keepa: /product 個別 stats
+    Keepa-->>Module: stats / reference
+    Sub-->>Main: Phase 2 完了
+        </pre>
+
+        <h3>6.3 Phase 3: draft.ts 統合 + tests</h3>
+        <p><em>既存 main() の collectDeals/collectFixed の隣に collectBrandHits を組み込む。</em></p>
+        <pre class="mermaid">
+sequenceDiagram
+    autonumber
+    participant Main as c2 (main)
+    participant CodeSub as code sub-agent
+    participant TestSub as test-strategist
+    participant Draft as src/draft.ts
+    participant Tests as src/brand-watch.test.ts
+
+    Main->>CodeSub: draft.ts に brand 経路統合
+    CodeSub->>Draft: collectBrandHits() 呼び出し追加
+    Main->>TestSub: 単体 + 統合テスト戦略策定
+    TestSub->>Tests: parseBrandHit / quota / dedupe test
+    CodeSub-->>Main: 統合完了
+    TestSub-->>Main: テスト緑
+        </pre>
+
+        <h3>6.4 Phase 4: 3-perspective review + delivery</h3>
+        <p><em>plan 内で security/code/architect レビュー + Delivery Manager 委譲。</em></p>
+        <pre class="mermaid">
+sequenceDiagram
+    autonumber
+    participant Main as c2 (main)
+    participant Sec as security-reviewer
+    participant CR as code-reviewer
+    participant Arch as architect
+    participant DM as Delivery Manager
+    participant PR as GitHub PR
+
+    par 3-perspective review
+        Main->>Sec: security review
+        Main->>CR: code review
+        Main->>Arch: architect review
+    end
+    Sec-->>Main: verdict
+    CR-->>Main: verdict
+    Arch-->>Main: verdict
+    Main->>DM: Delivery delegate (plan §Delivery 逐語引用)
+    DM->>PR: push + gh pr create + merge
+    DM-->>Main: merged
+        </pre>
+
+        <h3>6.X 設計判断の補足</h3>
+        <ul>
+          <li><strong>方式選定</strong>: 候補 A (Brand Search) / B (Product Finder) / C (Deals + post-filter) の中で B を採用。理由は Keepa 公式 brand インデックスで表記揺れ吸収 + サーバ側 value filter (deltaPercent90, current_AMAZON) で無駄 token 圧縮。</li>
+          <li><strong>BRAND_QUOTA 分離</strong>: 既存 <code>CATEGORY_QUOTA</code> (合計 20) を圧迫しない別枠。初期値は brand あたり 2 件 = 6 件/run。<code>MAX_POSTS_PER_RUN=30</code> 枠内に十分収まる。</li>
+          <li><strong>Notion category マッピング</strong>: brand hits は固定的に <code>kitchen</code> へ流す (3 ブランドとも実用品で kitchen がもっとも近い)。新 category <code>brand-list</code> 作成は Phase 1 では避け、Notion 運用が乱れたら次 PR で追加検討。</li>
+          <li><strong>title-whitelist 適用判断</strong>: brand 経路では <strong>適用しない</strong>。ブランド指定時点でテーマフィット済とみなし、白リスト不一致を理由に drop しない。乱用が観測されたら brand-specific deny-list を導入。</li>
+          <li><strong>失敗時の isolation</strong>: <code>collectBrandHits</code> 内例外は warn ログのみで catch、既存 Deals/Fixed 経路の処理は継続。run-log の <code>status</code> は brand 失敗単独では <code>partial</code> に降格しない (deals/fixed が成功していれば success)。</li>
+        </ul>
+      </section>
+
+      <section class="card" id="s7">
+        <h2>7. Risks & Mitigations</h2>
+
+        <div class="risk-card">
+          <div class="risk-card-header">
+            <span class="risk-badge risk-high">HIGH</span>
+            <span class="risk-card-title">ブランド表記揺れで hit 0 (Phase 1 で発覚)</span>
+          </div>
+          <dl class="risk-card-body">
+            <dt>発生条件</dt><dd>「山﨑実業」と「山崎実業」のように Unicode 異字体や英語名 (Yamazaki) を取り違える</dd>
+            <dt>対策</dt><dd>Phase 1 の verify-keepa-brand.ts で各表記の hit 数を事前確認、WATCH_BRANDS は dry-run で hit > 50 を確認したもののみ採用</dd>
+            <dt>検証</dt><dd>各ブランド ≥ 3 表記候補を dry-run、最大 hit の表記を採用</dd>
+            <dt>ロールバック</dt><dd>WATCH_BRANDS から該当 brand を削除して PR 再 push</dd>
+          </dl>
+        </div>
+
+        <div class="risk-card">
+          <div class="risk-card-header">
+            <span class="risk-badge risk-med">MED</span>
+            <span class="risk-card-title">brand=山崎実業 で hit する商品にテーマ外品が混入</span>
+          </div>
+          <dl class="risk-card-body">
+            <dt>発生条件</dt><dd>山﨑実業の主力が収納/雑貨で、bot テーマ「食・健康・生活の質」と完全一致しない</dd>
+            <dt>対策</dt><dd>Notion 投稿前の人 (bon) 承認ゲートで弾く / 乱用観測時は brand-specific deny-list 導入</dd>
+            <dt>検証</dt><dd>Phase 1 sample 100 件目視確認、テーマフィット率 ≥ 70% なら採用</dd>
+            <dt>ロールバック</dt><dd>WATCH_BRANDS から削除 or BRAND_QUOTA=0 でゲート</dd>
+          </dl>
+        </div>
+
+        <div class="risk-card">
+          <div class="risk-card-header">
+            <span class="risk-badge risk-med">MED</span>
+            <span class="risk-card-title">Keepa /query の token cost が想定より高い</span>
+          </div>
+          <dl class="risk-card-body">
+            <dt>発生条件</dt><dd>/query の正確な token cost が公式 docs にない (推測 10/page 以下)</dd>
+            <dt>対策</dt><dd>Phase 2 実装後の最初の cron run で tokensLeft 差分を実測、想定超過なら BRAND_QUOTA を縮小</dd>
+            <dt>検証</dt><dd>1 run の token 消費 ≤ 50 を超えたら警告ログ</dd>
+            <dt>ロールバック</dt><dd>WATCH_BRANDS=[] にして brand 経路自体を no-op に</dd>
+          </dl>
+        </div>
+
+        <div class="risk-card">
+          <div class="risk-card-header">
+            <span class="risk-badge risk-low">LOW</span>
+            <span class="risk-card-title">既存 deals 経路との dedupe ミスで同 ASIN が 2 件投稿</span>
+          </div>
+          <dl class="risk-card-body">
+            <dt>発生条件</dt><dd>brand 経路と deals 経路で同じ ASIN を別 Candidate として draft 投入</dd>
+            <dt>対策</dt><dd>main() 内の <code>queryDuplicateAsins</code> + <code>blocklist</code> は ASIN 単位で機能、既存仕組みで防御可能</dd>
+            <dt>検証</dt><dd>brand-watch.test.ts に重複 ASIN シナリオの test</dd>
+            <dt>ロールバック</dt><dd>Notion で重複 draft を手動削除 + bot 側で当該 ASIN を blocklist 追加</dd>
+          </dl>
+        </div>
+      </section>
+
+      <section class="card" id="s8">
+        <h2 data-num="08">8. Out of Scope</h2>
+        <ul>
+          <li><strong>collectDeals / collectFixed / collectBrandHits の共通化 refactor</strong>: 3 経路の Candidate 生成を抽象化する作業。本 PR では KISS で並列維持、refactor は別 PR で検討</li>
+          <li><strong>ブランド別 Notion category の新設</strong> (例: <code>brand-yamazaki</code>): Phase 1 では既存 <code>kitchen</code> へ流す。乱用観測時に category 分離検討</li>
+          <li><strong>brand 経路の即投稿化</strong> (固定 ASIN 相当): 現時点では Notion AI 経由 (Status=backlog → approved) で十分。即投稿は将来検討</li>
+          <li><strong>brand を超えた「manufacturer 軸ウォッチ」</strong>: 当面 brand のみで対応、manufacturer 追加は Phase 2 以降の拡張</li>
+          <li><strong>brand 経路の click-through KPI 計測ダッシュボード</strong>: 1 ヶ月後に bon が手動集計 (Notion DB の posted カウント比較)、ダッシュボード化は要望次第</li>
+        </ul>
+      </section>
+
+      <hr>
+      <p><em>関連 Plan: Plan Mode で生成 (slug は harness 提示。Plan 冒頭に <code>&gt; 対応 Spec: docs/specs/brand-watch.html</code> を明記)</em></p>
+    </main>
+  </div>
+</body>
+</html>

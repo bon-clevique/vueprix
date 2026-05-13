@@ -2,7 +2,17 @@ import axios from 'axios';
 import { KEEPA_DEAL_SORT_TYPE, KEEPA_DOMAIN, HISTORY_DAYS } from './config.js';
 import { logger } from './logger.js';
 
-const KEEPA_BASE = 'https://api.keepa.com';
+export const KEEPA_BASE = 'https://api.keepa.com';
+
+// Keepa /query endpoint response shape (asinsOnly=true で string[] を返す)。
+// brand-watch / verify-keepa-brand 等の caller が共通利用するため keepa.ts に集約。
+export interface KeepaQueryResponse {
+  asinList?: string[];
+  asins?: string[];
+  totalCount?: number;
+  productCount?: number;
+  tokensLeft?: number;
+}
 
 export interface Deal {
   asin: string;
