@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { FixedListing } from './fixed-templates.js';
 
 // 外部 I/O dependency をすべてモック化。各 test 内で mockResolved* を上書きしてシナリオを切替える。
 const getDealsMock = vi.fn();
@@ -9,7 +10,7 @@ const createPostedPageMock = vi.fn();
 const queryDuplicateAsinsMock = vi.fn();
 const loadBlocklistMock = vi.fn();
 const appendRunLogMock = vi.fn();
-const fetchFixedDescriptionsMock = vi.fn();
+const fetchFixedListingsMock = vi.fn();
 const dispatchMock = vi.fn();
 const appendHistoryMock = vi.fn();
 
@@ -39,9 +40,9 @@ vi.mock('./run-log.js', () => ({
 vi.mock('./fixed-templates.js', async () => {
   const actual = await vi.importActual<typeof import('./fixed-templates.js')>('./fixed-templates.js');
   return {
-    // composeFixedPostText は pure fn なので実装を再利用。fetchFixedDescriptions のみ mock。
+    // composeFixedPostText は pure fn なので実装を再利用。fetchFixedListings のみ mock。
     composeFixedPostText: actual.composeFixedPostText,
-    fetchFixedDescriptions: (...args: unknown[]) => fetchFixedDescriptionsMock(...args),
+    fetchFixedListings: (...args: unknown[]) => fetchFixedListingsMock(...args),
   };
 });
 
@@ -74,7 +75,7 @@ const resetAllMocks = () => {
   queryDuplicateAsinsMock.mockReset();
   loadBlocklistMock.mockReset();
   appendRunLogMock.mockReset();
-  fetchFixedDescriptionsMock.mockReset();
+  fetchFixedListingsMock.mockReset();
   dispatchMock.mockReset();
   appendHistoryMock.mockReset();
 
@@ -88,8 +89,8 @@ const resetAllMocks = () => {
   queryDuplicateAsinsMock.mockResolvedValue(new Set<string>());
   loadBlocklistMock.mockResolvedValue(new Set<string>());
   appendRunLogMock.mockResolvedValue(undefined);
-  fetchFixedDescriptionsMock.mockResolvedValue(new Map<string, string>());
-  // 固定ASIN 即投稿経路は本 default だと dispatch が呼ばれずに済む (fetchFixedDescriptions が空 Map)。
+  fetchFixedListingsMock.mockResolvedValue(new Map<string, FixedListing>());
+  // 固定ASIN 即投稿経路は本 default だと dispatch が呼ばれずに済む (fetchFixedListings が空 Map)。
   // 投稿成功シナリオの test 内で dispatchMock.mockResolvedValueOnce({...}) を上書きする。
   dispatchMock.mockResolvedValue({ x: { ok: false }, bluesky: { ok: false } });
   appendHistoryMock.mockResolvedValue(undefined);
@@ -402,8 +403,10 @@ describe('draft.main integration', () => {
       }
       return Promise.resolve(null);
     });
-    fetchFixedDescriptionsMock.mockResolvedValue(
-      new Map<string, string>([['B0C1JGD2T6', 'カリタの定番フィルター。1〜2人用。']]),
+    fetchFixedListingsMock.mockResolvedValue(
+      new Map<string, FixedListing>([
+        ['B0C1JGD2T6', { description: 'カリタの定番フィルター。1〜2人用。' }],
+      ]),
     );
     dispatchMock.mockResolvedValue({
       x: { ok: true, url: 'https://x.com/post/1' },
@@ -450,7 +453,7 @@ describe('draft.main integration', () => {
       }
       return Promise.resolve(null);
     });
-    fetchFixedDescriptionsMock.mockResolvedValue(new Map<string, string>());  // 空 Map
+    fetchFixedListingsMock.mockResolvedValue(new Map<string, FixedListing>());  // 空 Map
 
     const { main } = await import('./draft.js');
     await main();
@@ -474,8 +477,8 @@ describe('draft.main integration', () => {
       }
       return Promise.resolve(null);
     });
-    fetchFixedDescriptionsMock.mockResolvedValue(
-      new Map<string, string>([['B0C1JGD2T6', '紹介文']]),
+    fetchFixedListingsMock.mockResolvedValue(
+      new Map<string, FixedListing>([['B0C1JGD2T6', { description: '紹介文' }]]),
     );
     dispatchMock.mockResolvedValue({ x: { ok: false }, bluesky: { ok: false } });
 
@@ -503,8 +506,10 @@ describe('draft.main integration', () => {
       }
       return Promise.resolve(null);
     });
-    fetchFixedDescriptionsMock.mockResolvedValue(
-      new Map<string, string>([['B07B5CD8NY', 'Y字フロスでスキマケアに最適。']]),
+    fetchFixedListingsMock.mockResolvedValue(
+      new Map<string, FixedListing>([
+        ['B07B5CD8NY', { description: 'Y字フロスでスキマケアに最適。' }],
+      ]),
     );
     getItemsMock.mockResolvedValue([
       {
@@ -555,8 +560,10 @@ describe('draft.main integration', () => {
       }
       return Promise.resolve(null);
     });
-    fetchFixedDescriptionsMock.mockResolvedValue(
-      new Map<string, string>([['B0C1JGD2T6', 'カリタの定番フィルター。']]),
+    fetchFixedListingsMock.mockResolvedValue(
+      new Map<string, FixedListing>([
+        ['B0C1JGD2T6', { description: 'カリタの定番フィルター。' }],
+      ]),
     );
     getItemsMock.mockResolvedValue([
       {
@@ -598,8 +605,10 @@ describe('draft.main integration', () => {
       }
       return Promise.resolve(null);
     });
-    fetchFixedDescriptionsMock.mockResolvedValue(
-      new Map<string, string>([['B0C1JGD2T6', 'カリタの定番フィルター。']]),
+    fetchFixedListingsMock.mockResolvedValue(
+      new Map<string, FixedListing>([
+        ['B0C1JGD2T6', { description: 'カリタの定番フィルター。' }],
+      ]),
     );
     getItemsMock.mockResolvedValue([
       {
@@ -646,8 +655,8 @@ describe('draft.main integration', () => {
       }
       return Promise.resolve(null);
     });
-    fetchFixedDescriptionsMock.mockResolvedValue(
-      new Map<string, string>([['B07B5CD8NY', 'Y字フロス。']]),
+    fetchFixedListingsMock.mockResolvedValue(
+      new Map<string, FixedListing>([['B07B5CD8NY', { description: 'Y字フロス。' }]]),
     );
     getItemsMock.mockResolvedValue([]);  // PA-API 空レスポンス
 
@@ -673,8 +682,8 @@ describe('draft.main integration', () => {
       }
       return Promise.resolve(null);
     });
-    fetchFixedDescriptionsMock.mockResolvedValue(
-      new Map<string, string>([['B0C1JGD2T6', '紹介文']]),
+    fetchFixedListingsMock.mockResolvedValue(
+      new Map<string, FixedListing>([['B0C1JGD2T6', { description: '紹介文' }]]),
     );
 
     const { main } = await import('./draft.js');
@@ -682,6 +691,180 @@ describe('draft.main integration', () => {
 
     expect(dispatchMock).not.toHaveBeenCalled();
     expect(createPostedPageMock).not.toHaveBeenCalled();
+  });
+
+  it('uses manual reference price when SavingBasis is missing and Keepa drop is below threshold', async () => {
+    // B07B5CD8NY 想定: current=1080, Keepa fallback 1% (閾値未満), SavingBasis 無し。
+    // Notion 手動入力 参考定価 ¥1,490 で dropPercent = round((1490-1080)/1490*100) = 28 → 投稿される。
+    checkAsinMock.mockImplementation((asin: string) => {
+      if (asin === 'B07B5CD8NY') {
+        return Promise.resolve({
+          asin,
+          title: 'クリニカ デンタルフロス',
+          currentPrice: 1080,
+          referencePrice: 1094,
+          referenceSource: 'new-avg' as const,
+          dropPercent: 1,
+        });
+      }
+      return Promise.resolve(null);
+    });
+    fetchFixedListingsMock.mockResolvedValue(
+      new Map<string, FixedListing>([
+        ['B07B5CD8NY', { description: 'Y字フロス。', manualReferencePrice: 1490 }],
+      ]),
+    );
+    getItemsMock.mockResolvedValue([]);  // SavingBasis 無し
+    dispatchMock.mockResolvedValue({
+      x: { ok: true, url: 'https://x.com/p' },
+      bluesky: { ok: true, url: 'https://bsky.app/p' },
+    });
+
+    const { main } = await import('./draft.js');
+    await main();
+
+    expect(dispatchMock).toHaveBeenCalledTimes(1);
+    const dispatchInput = dispatchMock.mock.calls[0]?.[1] as { text: string };
+    expect(dispatchInput.text).toContain('【28% OFF】');
+    expect(dispatchInput.text).toContain('¥1,490');
+    expect(dispatchInput.text).toContain('¥1,080');
+
+    expect(createPostedPageMock).toHaveBeenCalledTimes(1);
+    const postedArg = createPostedPageMock.mock.calls[0]?.[0] as {
+      referencePrice: number;
+      dropPercent: number;
+    };
+    expect(postedArg.referencePrice).toBe(1490);
+    expect(postedArg.dropPercent).toBe(28);
+  });
+
+  it('prefers SavingBasis over manual reference price when both present', async () => {
+    // SavingBasis (¥4,400) と manualReferencePrice (¥5,000) が両方ある場合、SavingBasis を優先。
+    checkAsinMock.mockImplementation((asin: string) => {
+      if (asin === 'B09JL4R6SX') {
+        return Promise.resolve({
+          asin,
+          title: 'HARIO ドリッパー',
+          currentPrice: 2903,
+          referencePrice: 4399,
+          referenceSource: 'list-price' as const,
+          dropPercent: 34,
+        });
+      }
+      return Promise.resolve(null);
+    });
+    fetchFixedListingsMock.mockResolvedValue(
+      new Map<string, FixedListing>([
+        ['B09JL4R6SX', { description: 'HARIO ドリッパー。', manualReferencePrice: 5000 }],
+      ]),
+    );
+    getItemsMock.mockResolvedValue([
+      {
+        asin: 'B09JL4R6SX',
+        title: 'HARIO ドリッパー',
+        imageUrl: '',
+        currentPrice: 2903,
+        affiliateUrl: 'https://www.amazon.co.jp/dp/B09JL4R6SX',
+        savingBasis: 4400,
+      },
+    ]);
+    dispatchMock.mockResolvedValue({
+      x: { ok: true, url: 'https://x.com/p' },
+      bluesky: { ok: true, url: 'https://bsky.app/p' },
+    });
+
+    const { main } = await import('./draft.js');
+    await main();
+
+    expect(dispatchMock).toHaveBeenCalledTimes(1);
+    const dispatchInput = dispatchMock.mock.calls[0]?.[1] as { text: string };
+    // SavingBasis 4400 ベース: round((4400-2903)/4400*100) = 34
+    expect(dispatchInput.text).toContain('【34% OFF】');
+    expect(dispatchInput.text).toContain('¥4,400');
+    expect(dispatchInput.text).toContain('¥2,903');
+
+    expect(createPostedPageMock).toHaveBeenCalledTimes(1);
+    const postedArg = createPostedPageMock.mock.calls[0]?.[0] as { referencePrice: number };
+    expect(postedArg.referencePrice).toBe(4400);  // manual 5000 ではなく SavingBasis 4400
+  });
+
+  it('falls back to Keepa when manualReferencePrice <= current (defensive)', async () => {
+    // manualReferencePrice (¥1,000) が current (¥1,080) 以下 → manual 採用しない → Keepa fallback。
+    checkAsinMock.mockImplementation((asin: string) => {
+      if (asin === 'B07B5CD8NY') {
+        return Promise.resolve({
+          asin,
+          title: 'クリニカ デンタルフロス',
+          currentPrice: 1080,
+          referencePrice: 1100,
+          referenceSource: 'new-avg' as const,
+          dropPercent: 20,
+        });
+      }
+      return Promise.resolve(null);
+    });
+    fetchFixedListingsMock.mockResolvedValue(
+      new Map<string, FixedListing>([
+        ['B07B5CD8NY', { description: 'Y字フロス。', manualReferencePrice: 1000 }],
+      ]),
+    );
+    getItemsMock.mockResolvedValue([]);  // SavingBasis 無し
+    dispatchMock.mockResolvedValue({
+      x: { ok: true, url: 'https://x.com/p' },
+      bluesky: { ok: true, url: 'https://bsky.app/p' },
+    });
+
+    const { main } = await import('./draft.js');
+    await main();
+
+    expect(dispatchMock).toHaveBeenCalledTimes(1);
+    const dispatchInput = dispatchMock.mock.calls[0]?.[1] as { text: string };
+    expect(dispatchInput.text).toContain('【20% OFF】');
+    expect(dispatchInput.text).toContain('¥1,100');
+    expect(dispatchInput.text).toContain('¥1,080');
+
+    const postedArg = createPostedPageMock.mock.calls[0]?.[0] as { referencePrice: number };
+    expect(postedArg.referencePrice).toBe(1100);  // Keepa fallback
+  });
+
+  it('falls back to Keepa when manualReferencePrice drop exceeds sanity cap (>95%)', async () => {
+    // manualReferencePrice (¥999,999) は current (¥1,000) に対して 99.9% drop > 95% cap → reject。
+    // Keepa fallback (20%, ¥1,250) に落とす。current は MIN_PRICE_YEN (500) より上にしておく。
+    checkAsinMock.mockImplementation((asin: string) => {
+      if (asin === 'B0C1JGD2T6') {
+        return Promise.resolve({
+          asin,
+          title: 'カリタ コーヒーフィルター',
+          currentPrice: 1000,
+          referencePrice: 1250,
+          referenceSource: 'list-price' as const,
+          dropPercent: 20,
+        });
+      }
+      return Promise.resolve(null);
+    });
+    fetchFixedListingsMock.mockResolvedValue(
+      new Map<string, FixedListing>([
+        ['B0C1JGD2T6', { description: 'カリタの定番フィルター。', manualReferencePrice: 999999 }],
+      ]),
+    );
+    getItemsMock.mockResolvedValue([]);  // SavingBasis 無し
+    dispatchMock.mockResolvedValue({
+      x: { ok: true, url: 'https://x.com/p' },
+      bluesky: { ok: true, url: 'https://bsky.app/p' },
+    });
+
+    const { main } = await import('./draft.js');
+    await main();
+
+    expect(dispatchMock).toHaveBeenCalledTimes(1);
+    const dispatchInput = dispatchMock.mock.calls[0]?.[1] as { text: string };
+    expect(dispatchInput.text).toContain('【20% OFF】');
+    expect(dispatchInput.text).toContain('¥1,250');
+    expect(dispatchInput.text).toContain('¥1,000');
+
+    const postedArg = createPostedPageMock.mock.calls[0]?.[0] as { referencePrice: number };
+    expect(postedArg.referencePrice).toBe(1250);  // Keepa fallback (manual 999999 が cap 超過で reject)
   });
 
   it('creates draft with empty postText (Notion AI 運用)', async () => {
