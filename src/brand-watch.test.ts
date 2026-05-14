@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { Candidate } from './draft.js';
+import type { Candidate } from './types.js';
 
 // 外部 I/O dependency (axios / keepa.checkAsin) を mock。
 // vi.mock は hoisted されるため、mock factory 内で参照する変数は vi.hoisted で持ち上げる必要がある。
