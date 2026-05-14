@@ -65,7 +65,11 @@ export const HISTORY_DAYS = 90;
 // 安全装置 (PA-API / Notion 連打抑制)。CATEGORY_QUOTA 合計 + FIXED_ASINS 想定数を上回る値で運用。
 export const MAX_POSTS_PER_RUN = 30;
 export const MIN_PRICE_YEN = 500;
-export const COOLDOWN_HOURS = 24;
+// 30 日 (720h)。同一 ASIN の繰り返し露出を抑制するため 2026-05 に 24h → 720h に拡張。
+// セールサイクル ≈ 1 ヶ月想定。1 ヶ月運用後に 14 日 (336h) / 60 日 (1440h) 再調整可能。
+// 注: cooldown 拡張で queryDuplicateAsins の対象件数が増えるため MAX_QUERY_PAGES=10 (1,000 件)
+// cap 接近を warn ログで監視 (src/notion.ts page cap reached)。
+export const COOLDOWN_HOURS = 720;
 
 export const POST_HISTORY_PATH = "data/post-history.jsonl";
 

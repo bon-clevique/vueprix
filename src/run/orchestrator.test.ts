@@ -608,7 +608,7 @@ describe('orchestrator.main integration', () => {
     expect(createPostedPageMock).not.toHaveBeenCalled();
   });
 
-  it('skips fixed candidate when active set already contains it (24h cooldown)', async () => {
+  it('skips fixed candidate when active set already contains it (30-day cooldown)', async () => {
     queryDuplicateAsinsMock.mockResolvedValue(new Set<string>(['B0C1JGD2T6']));
     checkAsinMock.mockImplementation((asin: string) => {
       if (asin === 'B0C1JGD2T6') {
