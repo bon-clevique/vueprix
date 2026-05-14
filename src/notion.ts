@@ -149,6 +149,22 @@ export const buildClient = (): Client =>
     },
   });
 
+// run-log 専用の Client。書込は run の最後に呼ぶ best-effort で、書込失敗は draft.ts の
+// exit code に影響させない。そのため timeout を main の半分 (15s)、retry も 2 attempts に絞り、
+// run-log への待ち時間で run 全体を引っ張らない設計。`buildClient` と policy が分裂しないよう
+// notion.ts に集約する (PR-C B2 で run-log.ts の独自 `new Client(...)` から移管)。
+export const buildRunLogClient = (): Client =>
+  new Client({
+    auth: process.env.NOTION_API_KEY,
+    notionVersion: '2026-03-11',
+    timeoutMs: 15_000,
+    retry: {
+      maxRetries: 2,
+      initialRetryDelayMs: 1_000,
+      maxRetryDelayMs: 4_000,
+    },
+  });
+
 // createDraftPage / createPostedPage 共通の properties (Status と 投稿日時 以外) を構築する。
 // Status と 投稿日時 は呼び出し側で個別にマージする。
 const buildBaseProperties = (draft: DraftCandidate): Record<string, unknown> => {

@@ -1,5 +1,5 @@
-import { Client } from '@notionhq/client';
 import { logger } from './logger.js';
+import { buildRunLogClient } from './notion.js';
 
 // Notion run-log DB に各 cron run を 1 row として書き込む best-effort module。
 // schema は Notion DB「Run logs」(data_source_id は env で指定) に対応。
@@ -46,12 +46,7 @@ export const appendRunLog = async (payload: RunLogPayload): Promise<void> => {
     return;
   }
   try {
-    const client = new Client({
-      auth: process.env.NOTION_API_KEY,
-      notionVersion: '2026-03-11',
-      timeoutMs: 15_000,
-      retry: { maxRetries: 2, initialRetryDelayMs: 1_000, maxRetryDelayMs: 4_000 },
-    });
+    const client = buildRunLogClient();
     const ghaUrl = buildGhaRunUrl();
     const truncatedError = payload.errorMessage
       ? payload.errorMessage.slice(0, ERROR_MESSAGE_MAX_CHARS)

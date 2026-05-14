@@ -29,7 +29,8 @@ interface PaapiItem {
   };
 }
 
-interface PaapiResponse {
+// module-internal type、unit test 露出のため export (本来は file-private)。外部 module からは使わない。
+export interface PaapiResponse {
   ItemsResult?: { Items?: PaapiItem[] };
   Errors?: Array<{ Code: string; Message?: string; __type?: string }>;
 }
@@ -77,7 +78,9 @@ export const isRetryable = (err: unknown): boolean => {
   return typeof e.code === 'string' && RETRYABLE_NETWORK_CODES.has(e.code);
 };
 
-const buildBody = (asins: string[]): string =>
+// module-internal、unit test 露出のため export (本来は file-private)。外部 module から呼ばない。
+// 露出目的: PartnerTag 等の env 統合と Resources の hardcode を test で pin する。
+export const buildBody = (asins: string[]): string =>
   JSON.stringify({
     PartnerTag: env('PAAPI_PARTNER_TAG'),
     PartnerType: 'Associates',
@@ -136,8 +139,15 @@ const sendSigned = async (host: string, body: string): Promise<PaapiResponse> =>
   }
 };
 
-const parseProducts = (response: PaapiResponse): ProductInfo[] => {
+// module-internal、unit test 露出のため export (本来は file-private)。外部 module から呼ばない。
+// 露出目的: SavingBasis / Errors / null fallback の挙動を test で pin する。
+//
+// 設計: Errors と Items が同居する partial failure を許容する (Errors を warn ログに残しつつ、
+// 有効な Items は parse 続行)。「Errors があれば全件 fail」ではないことに注意。
+export const parseProducts = (response: PaapiResponse): ProductInfo[] => {
   if (response.Errors && response.Errors.length > 0) {
+    // partial failure: 一部 ASIN が PA-API 側で見つからない / 制限等で返らないケース。
+    // 残りの有効 Items は parse して返す (全件 fail ではない)。
     const codes = response.Errors.map((e) => e.Code);
     logger.warn('paapi', 'partial errors', { codes, count: codes.length });
   }
