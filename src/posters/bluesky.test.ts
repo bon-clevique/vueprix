@@ -65,20 +65,36 @@ describe('blueskyPoster session reuse (B7)', () => {
     });
   });
 
-  it('re-logs in after a post failure (agent state reset on post error)', async () => {
+  it('keeps cached agent on transient post failure (5xx / network、session は valid)', async () => {
     const { blueskyPoster } = await import('./bluesky.js');
-    // 1 回目 post 成功 → 2 回目 post 失敗 → 3 回目で再 login して post 成功
+    // 1 回目 post 成功 → 2 回目 post 失敗 (5xx 想定、status なし or 500) → 3 回目 post 成功
+    // session は valid のため cache 保持 → login は 1 回のみ
     postMock
       .mockResolvedValueOnce({ uri: 'at://did:plc:xxx/app.bsky.feed.post/r1', cid: 'c1' })
-      .mockRejectedValueOnce(new Error('post upstream 500'))
+      .mockRejectedValueOnce(Object.assign(new Error('upstream 500'), { status: 500 }))
       .mockResolvedValueOnce({ uri: 'at://did:plc:xxx/app.bsky.feed.post/r3', cid: 'c3' });
 
-    await blueskyPoster.post({ asin: 'B1', text: 't1' });          // 成功
+    await blueskyPoster.post({ asin: 'B1', text: 't1' });
     await expect(blueskyPoster.post({ asin: 'B2', text: 't2' })).rejects.toThrow(/Bluesky post failed/);
-    await blueskyPoster.post({ asin: 'B3', text: 't3' });          // 再 login + post 成功
+    await blueskyPoster.post({ asin: 'B3', text: 't3' });
 
-    // login 2 回 (初回 + post fail 後の再 login)、post 3 回 (成功/失敗/成功)
-    expect(loginMock).toHaveBeenCalledTimes(2);
+    expect(loginMock).toHaveBeenCalledTimes(1);  // 5xx では cache 保持、再 login しない
+    expect(postMock).toHaveBeenCalledTimes(3);
+  });
+
+  it('resets cached agent on auth-level post failure (401 / 403)', async () => {
+    const { blueskyPoster } = await import('./bluesky.js');
+    // 1 回目 成功 → 2 回目 401 (= session 異常 → reset) → 3 回目 再 login + 成功
+    postMock
+      .mockResolvedValueOnce({ uri: 'at://did:plc:xxx/app.bsky.feed.post/r1', cid: 'c1' })
+      .mockRejectedValueOnce(Object.assign(new Error('unauth'), { status: 401 }))
+      .mockResolvedValueOnce({ uri: 'at://did:plc:xxx/app.bsky.feed.post/r3', cid: 'c3' });
+
+    await blueskyPoster.post({ asin: 'B1', text: 't1' });
+    await expect(blueskyPoster.post({ asin: 'B2', text: 't2' })).rejects.toThrow(/Bluesky post failed/);
+    await blueskyPoster.post({ asin: 'B3', text: 't3' });
+
+    expect(loginMock).toHaveBeenCalledTimes(2);  // 401 で reset、3 回目で再 login
     expect(postMock).toHaveBeenCalledTimes(3);
   });
 

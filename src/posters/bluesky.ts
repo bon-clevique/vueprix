@@ -24,9 +24,11 @@ const buildBlueskyUrl = (atUri: string): string | undefined => {
 // 旧実装は send() 毎に new AtpAgent + login → publishFixedCandidates で fixed 3 件 → login 3 回。
 // Bluesky login API は IP 単位 rate-limit (公式 docs: createSession は厳しめ)。
 // module-scope に AtpAgent を保持し、初回 send で login → 2 回目以降は同 agent を再利用。
-// post 失敗時は agent state を null にして次回 send で再 login する fail-safe (session 期限の
-// 推定: AtpAgent は自動 refresh トークン管理を行うが、ネットワーク断や認証期限切れの
-// edge case を考慮し、post 失敗 = session 異常と仮定して reset)。
+//
+// AtpAgent は内部で 401/ExpiredToken を検知して refreshSession を自動実行するため、
+// 通常の token 期限切れは agent.post() 層まで到達しない。よって post() の失敗種別を分けて
+// 401/403 (= session/auth 異常) のみ cache を捨てる。429 (rate-limit) や 5xx (一過性) では
+// valid session を捨てず再利用する (createSession rate-limit の浪費を回避)。
 let cachedAgent: AtpAgent | null = null;
 
 const resetAgent = (): void => {
@@ -58,8 +60,10 @@ const send = async (input: PostInput): Promise<PostOutput> => {
     logger.info('poster.bluesky', 'Bluesky post sent', { asin: input.asin, uri: res.uri, url });
     return url ? { url } : {};
   } catch (err) {
-    // post 失敗 = session 異常の可能性ありとみなし cache を捨てる。次回 send で再 login。
-    resetAgent();
+    // session/auth 異常 (401/403) のみ cache reset。それ以外 (rate-limit 429 / 5xx / network) は
+    // session 自体は valid なので保持し、次回 send で再利用する。
+    const status = (err as { status?: number }).status;
+    if (status === 401 || status === 403) resetAgent();
     throw redactedBlueskyError('post', err);
   }
 };
