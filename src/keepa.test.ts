@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { calcDropPercent } from './filter.js';
 import { parseDeal, pickReferencePrice, toYen, type KeepaDealsItem } from './keepa.js';
 
 describe('toYen', () => {
@@ -224,5 +225,27 @@ describe('pickReferencePrice', () => {
     };
     const result = pickReferencePrice(stats, 1080, 1490);
     expect(result).toEqual({ price: 1490, source: 'paapi-saving-basis' });
+  });
+});
+
+// PR-A B8 regression: keepa.ts:211 の dropPercent 計算を inline から calcDropPercent(current, picked.price)
+// に置換した。引数順誤り (符号反転) を防ぐため、典型 reference シナリオで計算結果が一致することを pin。
+describe('checkAsin dropPercent computation (calcDropPercent 統一の符号 pin)', () => {
+  it('calcDropPercent(current, picked.price) signature returns the same value as inline formula', () => {
+    // 旧 inline: Math.round(((picked.price - current) / picked.price) * 100)
+    // 新     : calcDropPercent(current, picked.price) = Math.round(((picked.price - current) / picked.price) * 100)
+    // 両者は数値一致しなければならない。サンプル: current=850, picked.price=1000 → 15
+    const current = 850;
+    const pickedPrice = 1000;
+    const inlineResult = Math.round(((pickedPrice - current) / pickedPrice) * 100);
+    const helperResult = calcDropPercent(current, pickedPrice);
+    expect(helperResult).toBe(inlineResult);
+    expect(helperResult).toBe(15);
+  });
+
+  it('returns positive percent for current < reference (符号正方向)', () => {
+    // 反転バグ (calcDropPercent(pickedPrice, current)) なら負値になるはず → 確実に正値になることを pin
+    expect(calcDropPercent(1080, 1490)).toBe(28);  // B07B5CD8NY 実例
+    expect(calcDropPercent(800, 1000)).toBe(20);
   });
 });

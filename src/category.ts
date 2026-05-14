@@ -15,15 +15,16 @@ export type NotionCategory =
   | 'fixed-list';
 
 const KEEPA_CATEGORY_MAP: Record<number, NotionCategory> = {
-  57239051: 'food',      // 食品・飲料・お酒
-  160384011: 'health',   // ドラッグストア
-  2127209051: 'pc-desk', // パソコン・周辺機器
-  637394: 'gaming',      // ゲーム
-  3477981: 'audio',      // イヤホン・ヘッドホン本体
-  // VERIFY: 下記 2 件は推定値。`tsx scripts/verify-keepa-categories.ts 3833931 86893051` で
-  // 名称と productCount を確認のうえ、TBD コメントを外すこと。
-  3833931: 'kitchen',    // ホーム&キッチン > キッチン用品 (TBD: verify)
-  86893051: 'stationery',// 文房具・オフィス用品 (TBD: verify)
+  57239051: 'food',      // 食品・飲料・お酒 (2.2M, verified 2026-05-06)
+  160384011: 'health',   // ドラッグストア (verified 2026-05-06)
+  2127209051: 'pc-desk', // パソコン・周辺機器 (verified 2026-05-06)
+  637394: 'gaming',      // ゲーム (verified 2026-05-06)
+  3477981: 'audio',      // イヤホン・ヘッドホン本体 (verified 2026-05-06)
+  // 3833931 / 86893051 は PR-A B10 (2026-05-14) で verify した結果、それぞれ
+  // Keepa response に存在せず / 「果物」で 57239051 (食品全体) に包含、と判明したため削除。
+  // 詳細: docs/notes/keepa-categories.md
+  // kitchen / stationery の NotionCategory 型 option は brand 経路 (BRAND_CATEGORY_MAP) と
+  // 将来拡張のため Notion select option として維持する。
 };
 
 export const mapKeepaCategoryToNotion = (categoryId: number): NotionCategory =>

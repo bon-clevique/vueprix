@@ -1,5 +1,6 @@
 import axios from 'axios';
 import { KEEPA_DEAL_SORT_TYPE, KEEPA_DOMAIN, HISTORY_DAYS } from './config.js';
+import { calcDropPercent } from './filter.js';
 import { logger } from './logger.js';
 
 export const KEEPA_BASE = 'https://api.keepa.com';
@@ -208,7 +209,10 @@ export const checkAsin = async (asin: string): Promise<PriceHistory | null> => {
     logger.debug('keepa', 'checkAsin dropped (no title)', { asin });
     return null;
   }
-  const dropPercent = Math.max(0, Math.round(((picked.price - current) / picked.price) * 100));
+  // calcDropPercent(current, reference) シグネチャに整列。引数順は (current, picked.price)。
+  // picked.price > current は pickReferencePrice の post-condition で保証されるが、Math.max(0, ...) は
+  // 丸め誤差や invariant 違反時の防御として保持 (二重防御)。
+  const dropPercent = Math.max(0, calcDropPercent(current, picked.price));
   return {
     asin,
     title,

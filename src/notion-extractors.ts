@@ -62,15 +62,26 @@ export const extractNumber = (prop: unknown): number | null => {
 // URL property を厳格に検証して返す。前後 whitespace は trim、http(s) 以外は reject。
 // Notion UI は URL field でも任意 string を受け入れるため、`javascript:...` や plain text の
 // 誤入力で SNS 投稿が破損する事故を防ぐ defense-in-depth。
-// 旧 notion.ts#extractUrl は trim/protocol 検証なし、fixed-templates.ts#extractUrl (PR #47) は
-// trim + http(s) only。**堅牢版** を正典化。
+//
+// PR-A LOW-1 改訂: scheme 比較を case-insensitive に。`HTTPS://example.com` / `Http://...` も受理。
+// WHATWG URL parser (`new URL(...).href`) は採用しない — bare host に trailing slash が
+// 自動付加される (`https://amzn.example` → `https://amzn.example/`) と SNS 投稿リンクの見た目が
+// 変わるため。戻り値は trimmed の元形を保持し scheme allowlist のみ厳格化する。
+//
+// 注: path 部分は大文字保持される (例: `HTTPS://EXAMPLE.COM/Path` → `HTTPS://EXAMPLE.COM/Path`)。
+// Amazon URL は case-insensitive なので click 動作には影響しない。bon の運用慣行は lower-case scheme。
 export const extractUrl = (prop: unknown): string | null => {
   if (!prop || typeof prop !== 'object') return null;
   const raw = (prop as { url?: string | null }).url;
   if (typeof raw !== 'string') return null;
   const trimmed = raw.trim();
   if (!trimmed) return null;
-  if (!trimmed.startsWith('https://') && !trimmed.startsWith('http://')) return null;
+  const colonIdx = trimmed.indexOf(':');
+  if (colonIdx <= 0) return null;
+  const scheme = trimmed.slice(0, colonIdx).toLowerCase();
+  if (scheme !== 'https' && scheme !== 'http') return null;
+  // scheme 以降の `://` 区切りも要求 (`http:foo` のような scheme-only URI を reject)
+  if (trimmed.slice(colonIdx, colonIdx + 3) !== '://') return null;
   return trimmed;
 };
 
