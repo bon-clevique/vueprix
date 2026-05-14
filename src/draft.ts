@@ -4,8 +4,9 @@ import { main } from './run/orchestrator.js';
 
 // vueprix entrypoint。実装本体は run/orchestrator.ts に分離 (PR-A4)。
 // package.json scripts は `tsx src/draft.ts` を参照 — 本 file は薄い shim として保持する。
-// test 互換のため main / selectByQuota を re-export し、Candidate 型も draft.ts 経由で取れるようにする。
-export { main, selectByQuota } from './run/orchestrator.js';
+// PR-B (2026-05-14) で selectByQuota は run/quota.ts に分離、shim 経由 re-export は廃止。
+// Candidate 型は types.ts が SoT、互換のため draft.ts 経由でも取れるよう re-export 維持。
+export { main } from './run/orchestrator.js';
 export type { Candidate } from './types.js';
 
 // vitest 実行中は main() を自動起動しない (test がモジュールを import する際の副作用回避)。

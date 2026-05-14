@@ -5,10 +5,11 @@ import { describe, expect, it } from 'vitest';
 // 本 file は shim contract (exports / no auto-run under VITEST) のみ pin down する。
 
 describe('draft entrypoint shim', () => {
-  it('re-exports main / selectByQuota / Candidate from run/orchestrator (test contract)', async () => {
+  it('re-exports main from run/orchestrator (test contract)', async () => {
+    // PR-B (2026-05-14) で selectByQuota は run/quota.ts に分離、本 shim 経由 re-export は廃止。
+    // main のみ shim 経由で取れる (test の `await import('./draft.js')` 互換目的)。
     const mod = await import('./draft.js');
     expect(typeof mod.main).toBe('function');
-    expect(typeof mod.selectByQuota).toBe('function');
   });
 
   it('does not auto-run main() when VITEST is set (import 副作用回避)', async () => {
