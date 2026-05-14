@@ -6,6 +6,7 @@ import { collectBrandHits } from './brand-watch.js';
 import { CATEGORY_FIXED, mapKeepaCategoryToNotion, type NotionCategory } from './category.js';
 import {
   CATEGORY_QUOTA,
+  COOLDOWN_HOURS,
   DROP_THRESHOLD_PERCENT,
   FIXED_ASINS,
   KEEPA_CATEGORIES,
@@ -14,7 +15,7 @@ import {
 } from './config.js';
 import { calcDropPercent, filterByActiveAsins, isGoodDeal } from './filter.js';
 import { composeFixedPostText, fetchFixedListings, type FixedListing } from './fixed-templates.js';
-import { appendHistory } from './history.js';
+import { appendHistory, readRecentAsins } from './history.js';
 import { checkAsin, getDeals } from './keepa.js';
 import { logger } from './logger.js';
 import {
@@ -414,10 +415,22 @@ export const main = async (): Promise<void> => {
   try {
     const partnerTag = requirePartnerTag();
 
-    const [blocklist, activeAsins] = await Promise.all([
+    // 二重投稿ガード = Notion (primary) ∪ post-history.jsonl (secondary、PR-A3)。
+    //   - Notion queryDuplicateAsins: backlog/doing/approved/posted + cooldown 内 ASIN
+    //   - readRecentAsins: SNS 投稿成功直後に append される jsonl から cooldown 内 ASIN
+    // publishFixedCandidates の SNS 投稿成功 → Notion 書き込み失敗 race で Notion 側に entry が
+    // 残らなくても jsonl 側で次回 run の再投稿を防ぐ。
+    const [blocklist, notionDup, historyDup] = await Promise.all([
       loadBlocklist(),
       queryDuplicateAsins(startedAt),
+      readRecentAsins(startedAt, COOLDOWN_HOURS),
     ]);
+    const activeAsins = new Set([...notionDup, ...historyDup]);
+    logger.info('draft', 'activeAsins assembled', {
+      notion: notionDup.size,
+      history: historyDup.size,
+      union: activeAsins.size,
+    });
 
     const { candidates: dealCandidates, lastTokensLeft } = await collectDeals();
     tokensLeft = lastTokensLeft;

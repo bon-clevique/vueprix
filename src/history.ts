@@ -44,3 +44,50 @@ export const appendHistory = async (
     });
   }
 };
+
+// PR-A3: post-history.jsonl から timestamp > now - cooldownHours のエントリを抽出して ASIN Set を返す。
+// 用途: draft.ts の二重投稿ガード補強。Notion queryDuplicateAsins (primary) と union して活性 ASIN を確定する。
+//   - 想定 race: publishFixedCandidates の SNS 投稿成功 → Notion createPostedPage 失敗 で、
+//     Notion 上に entry が無く次回 run で再投稿される。history.jsonl は SNS 成功直後に append される
+//     ため、こちらを secondary ガードとして読むことで race window を縮める。
+//   - GitHub Actions cron は auto-commit 経由で jsonl を repo 同期するが lag があるため、
+//     primary は Notion 側の DB。jsonl は補強であり single source of truth ではない。
+// File 不在は空 Set 返却 (初回起動 / DRY_RUN 時の fail-safe)。malformed JSON 行は warn ログ + skip。
+export const readRecentAsins = async (
+  now: Date,
+  cooldownHours: number,
+  filePath: string = POST_HISTORY_PATH,
+): Promise<Set<string>> => {
+  const abs = resolvePath(filePath);
+  const cutoff = now.getTime() - cooldownHours * 60 * 60 * 1000;
+  const asins = new Set<string>();
+  let raw: string;
+  try {
+    raw = await fs.readFile(abs, 'utf-8');
+  } catch (err) {
+    // ENOENT は初回起動 / DRY_RUN 等の正常ケース。それ以外 (EACCES 等) は warn のみで空返却 (run を止めない)。
+    if (err instanceof Error && 'code' in err && (err as { code: string }).code === 'ENOENT') {
+      return asins;
+    }
+    logger.warn('history', 'readRecentAsins read failed', {
+      path: abs,
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return asins;
+  }
+  for (const line of raw.split('\n')) {
+    if (!line.trim()) continue;
+    try {
+      const entry = JSON.parse(line) as Partial<PostHistoryEntry>;
+      if (!entry.timestamp || !entry.asin) continue;
+      const t = Date.parse(entry.timestamp);
+      if (Number.isNaN(t)) continue;
+      if (t >= cutoff) asins.add(entry.asin);
+    } catch (err) {
+      logger.warn('history', 'readRecentAsins malformed line, skipping', {
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+  return asins;
+};

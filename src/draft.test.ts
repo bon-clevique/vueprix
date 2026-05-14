@@ -13,6 +13,7 @@ const appendRunLogMock = vi.fn();
 const fetchFixedListingsMock = vi.fn();
 const dispatchMock = vi.fn();
 const appendHistoryMock = vi.fn();
+const readRecentAsinsMock = vi.fn();
 const collectBrandHitsMock = vi.fn();
 
 vi.mock('./brand-watch.js', () => ({
@@ -62,6 +63,7 @@ vi.mock('./posters/index.js', async () => {
 
 vi.mock('./history.js', () => ({
   appendHistory: (...args: unknown[]) => appendHistoryMock(...args),
+  readRecentAsins: (...args: unknown[]) => readRecentAsinsMock(...args),
 }));
 
 // FIXED_ASINS は config.ts に const で定義されているので、mockKeepa の checkAsin に
@@ -83,6 +85,7 @@ const resetAllMocks = () => {
   fetchFixedListingsMock.mockReset();
   dispatchMock.mockReset();
   appendHistoryMock.mockReset();
+  readRecentAsinsMock.mockReset();
   collectBrandHitsMock.mockReset();
 
   // sane defaults: tokensLeft は null にして「設定無し」を示す
@@ -100,6 +103,7 @@ const resetAllMocks = () => {
   // 投稿成功シナリオの test 内で dispatchMock.mockResolvedValueOnce({...}) を上書きする。
   dispatchMock.mockResolvedValue({ x: { ok: false }, bluesky: { ok: false } });
   appendHistoryMock.mockResolvedValue(undefined);
+  readRecentAsinsMock.mockResolvedValue(new Set<string>());
   // brand 経路 default: 空配列 (個別 test で brand Candidate を返したい場合は上書きする)。
   collectBrandHitsMock.mockResolvedValue([]);
 };
@@ -276,6 +280,30 @@ describe('draft.main integration', () => {
     const calledAsins = createDraftPageMock.mock.calls.map((c) => (c[0] as { asin: string }).asin);
     expect(calledAsins).toContain('B000NEW');
     expect(calledAsins).not.toContain('B000ACTIVE');
+  });
+
+  // PR-A3: activeAsins = Notion (primary) ∪ post-history.jsonl (secondary)。
+  // jsonl 側にのみ存在する ASIN も draft 経路で skip されることを pin down する。
+  it('drops candidates present in post-history.jsonl even when not in Notion (secondary guard)', async () => {
+    getDealsMock.mockImplementation((categoryId: number) => {
+      if (categoryId === 57239051) {
+        return Promise.resolve(dealsResult([
+          buildDeal({ asin: 'B0HISTORY', title: '国産 履歴のみ重複' }),
+          buildDeal({ asin: 'B000NEW', title: '国産 新規' }),
+        ]));
+      }
+      return Promise.resolve(dealsResult([]));
+    });
+    // Notion 側は空、history 側に B0HISTORY あり
+    queryDuplicateAsinsMock.mockResolvedValue(new Set<string>());
+    readRecentAsinsMock.mockResolvedValue(new Set(['B0HISTORY']));
+
+    const { main } = await import('./draft.js');
+    await main();
+
+    const calledAsins = createDraftPageMock.mock.calls.map((c) => (c[0] as { asin: string }).asin);
+    expect(calledAsins).toContain('B000NEW');
+    expect(calledAsins).not.toContain('B0HISTORY');
   });
 
   it('limits food drafts to its CATEGORY_QUOTA (=5) regardless of how many deals returned', async () => {
