@@ -71,6 +71,10 @@ export const COOLDOWN_HOURS = 24;
 
 export const POST_HISTORY_PATH = "data/post-history.jsonl";
 
+// X (Twitter) 投稿文字数上限。Bluesky は 300 chars でより緩いが両 SNS に同じ text を投げるため厳しい方 (X) に合わせる。
+// fixed-templates.ts (composeFixedPostText) と publish.ts (deals/brand publish gate) が共通利用する single source of truth。
+export const POST_TEXT_MAX_CHARS = 280;
+
 // queryDuplicateAsins の Notion paging 上限。
 // page_size=100 × MAX_QUERY_PAGES = 1000 件。到達時は warn ログ + 切り上げ (要拡張シグナル)。
 export const MAX_QUERY_PAGES = 10;
@@ -83,6 +87,16 @@ export const WATCH_BRANDS: readonly string[] = [
   'KAI',       // 貝印 (関孫六 等)
   'HARIO',     // HARIO (V60 等)
 ];
+
+// brand → NotionCategory map。WATCH_BRANDS に追加するブランドが non-kitchen 領域 (例: 貝印 の理容品 / 文房具系) に
+// 拡張されるとき、本 map に entry を増やすだけで brand-watch.ts は変更不要。
+// 未登録 brand への fallback は 'kitchen' (現運用は kitchen 中心のため穏当な default)。
+export const BRAND_CATEGORY_MAP: Record<string, NotionCategory> = {
+  Yamazaki: 'kitchen',
+  KAI: 'kitchen',
+  HARIO: 'kitchen',
+};
+export const BRAND_DEFAULT_CATEGORY: NotionCategory = 'kitchen';
 
 // brand あたりの 1 run 採用上限。CATEGORY_QUOTA とは独立枠 (deals 経路を圧迫しない)。
 // 3 brand × 2 件 = 6 件/run。MAX_POSTS_PER_RUN=30 に十分収まる。

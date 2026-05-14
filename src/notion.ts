@@ -2,6 +2,15 @@ import { Client } from '@notionhq/client';
 import type { NotionCategory } from './category.js';
 import { COOLDOWN_HOURS, MAX_QUERY_PAGES } from './config.js';
 import { logger } from './logger.js';
+import {
+  extractDate,
+  extractNumber,
+  extractRichText,
+  extractSelect,
+  extractStatus,
+  extractTitleText,
+  extractUrl,
+} from './notion-extractors.js';
 
 export interface PostedLinks {
   x?: string;
@@ -140,14 +149,6 @@ export const buildClient = (): Client =>
     },
   });
 
-interface NotionRichText {
-  plain_text?: string;
-}
-
-interface NotionSelectOption {
-  name?: string;
-}
-
 // createDraftPage / createPostedPage 共通の properties (Status と 投稿日時 以外) を構築する。
 // Status と 投稿日時 は呼び出し側で個別にマージする。
 const buildBaseProperties = (draft: DraftCandidate): Record<string, unknown> => {
@@ -268,54 +269,20 @@ interface NotionPageRich {
   properties: Record<string, unknown>;
 }
 
-const extractRichText = (prop: unknown): string => {
-  if (!prop || typeof prop !== 'object') return '';
-  const rt = (prop as { rich_text?: NotionRichText[] }).rich_text;
-  if (!rt) return '';
-  return rt.map((t) => t.plain_text ?? '').join('');
-};
-
-const extractTitleProp = (prop: unknown): string => {
-  if (!prop || typeof prop !== 'object') return '';
-  const title = (prop as { title?: NotionRichText[] }).title;
-  if (!title) return '';
-  return title.map((t) => t.plain_text ?? '').join('');
-};
-
-const extractSelect = (prop: unknown): string => {
-  if (!prop || typeof prop !== 'object') return '';
-  const select = (prop as { select?: NotionSelectOption | null }).select;
-  return select?.name ?? '';
-};
-
-// PR-8: Notion の status property type は `status: { name, color, id }` を返す。
-// select と shape は似ているが property type が違うため別 helper にしている。
-const extractStatus = (prop: unknown): string => {
-  if (!prop || typeof prop !== 'object') return '';
-  const status = (prop as { status?: { name?: string } | null }).status;
-  return status?.name ?? '';
-};
-
-const extractNumber = (prop: unknown): number => {
-  if (!prop || typeof prop !== 'object') return 0;
-  return (prop as { number?: number }).number ?? 0;
-};
-
-const extractUrl = (prop: unknown): string | null => {
-  if (!prop || typeof prop !== 'object') return null;
-  return (prop as { url?: string | null }).url ?? null;
-};
-
-// Notion date property の date.start を ISO 文字列で返す。未設定 / null / 空文字は全て null。
-// 空文字も null に coerce する理由: publish.ts の `if (payload.postedAt)` ガードを
-// 空文字 (falsy だが string) で擦り抜けさせない (二重投稿防止 hook の補強)。
-const extractDate = (prop: unknown): string | null => {
-  if (!prop || typeof prop !== 'object') return null;
-  const date = (prop as { date?: { start?: string | null } | null }).date;
-  return date?.start || null;
+// number property の null fail-fast helper。fetchPageById で必須 number property
+// (通常価格 / セール価格 / 割引率) が null/未設定 だった場合の silent default-0 を防ぐ。
+// publish.ts は `DraftPayload.currentPrice: number` 等を非 null 前提で扱うため、
+// ここで早期 throw して publish gate に乗せる方が安全。
+const requireNumber = (prop: unknown, label: string, pageId: string): number => {
+  const n = extractNumber(prop);
+  if (n === null) {
+    throw new Error(`pageId=${pageId} ${label} is null/missing (number property required)`);
+  }
+  return n;
 };
 
 // page から投稿に必要な properties を抽出。Status が approved 以外なら throw (二重投稿防止 hook)。
+// 必須 number property が null なら throw (fail-fast、PR B1 で導入)。
 export const fetchPageById = async (pageId: string): Promise<DraftPayload> => {
   requireConfigured();
   const client = buildClient();
@@ -333,19 +300,23 @@ export const fetchPageById = async (pageId: string): Promise<DraftPayload> => {
   const rawCategory = extractSelect(props['カテゴリ']);
   // 未知のカテゴリは silent に fixed-list に丸める (publish を止めない方針)。
   const category: NotionCategory = isNotionCategory(rawCategory) ? rawCategory : CATEGORY.FIXED_LIST;
+  // 必須 number property を null fail-fast で取得。
+  const currentPrice = requireNumber(props['セール価格'], 'セール価格', pageId);
+  const referencePrice = requireNumber(props['通常価格'], '通常価格', pageId);
+  const rawDropPercent = requireNumber(props['割引率'], '割引率', pageId);
   return {
     pageId: page.id,
     asin: extractRichText(props.ASIN),
-    title: extractTitleProp(props['名前']),
+    title: extractTitleText(props['名前']),
     postText: extractRichText(props['投稿文']),
     amazonUrl: extractUrl(props['Amazon URL']),
-    currentPrice: extractNumber(props['セール価格']),
-    referencePrice: extractNumber(props['通常価格']),
+    currentPrice,
+    referencePrice,
     // Notion の percent property は 0.59 形式で保存している (createDraftPage 側で /100 して書き込み)。
     // publish 側に integer percent で渡すため * 100 で復元。
     // H3 対応: float 往復精度誤差 (15 → 0.15000000000000002 → 14.999...) を吸収するため
     // 高精度 round 経由で integer に丸め直す。
-    dropPercent: Math.round(Math.round(extractNumber(props['割引率']) * 1_000_000) / 10_000),
+    dropPercent: Math.round(Math.round(rawDropPercent * 1_000_000) / 10_000),
     category,
     postedAt: extractDate(props['投稿日時']),
   };

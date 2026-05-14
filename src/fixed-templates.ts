@@ -1,10 +1,12 @@
+import { POST_TEXT_MAX_CHARS } from './config.js';
 import { logger } from './logger.js';
 import { buildClient } from './notion.js';
-
-// X (Twitter) 投稿文字数上限。Bluesky は 300 chars でより緩いが、両 SNS に同じ text を投げるため
-// 厳しい方 (X) に合わせる。publish.ts の POST_TEXT_MAX_CHARS と同値で意図的に重複定義 (本 module は
-// publish.ts に依存しない独立 path のため)。
-const POST_TEXT_MAX_CHARS = 280;
+import {
+  extractNumber,
+  extractRichText,
+  extractTitleText,
+  extractUrl,
+} from './notion-extractors.js';
 
 // Notion 固定ASIN DB のスキーマ:
 //   - ASIN (title)
@@ -15,10 +17,6 @@ const POST_TEXT_MAX_CHARS = 280;
 //   - 登録日 (date)
 //
 // 環境変数 NOTION_FIXED_ASIN_DATA_SOURCE_ID = 固定ASIN DB の data source UUID。
-
-interface NotionRichTextItem {
-  plain_text?: string;
-}
 
 interface NotionPage {
   properties?: Record<string, unknown>;
@@ -39,41 +37,6 @@ export interface FixedListing {
   manualReferencePrice?: number;
   amazonUrl?: string;
 }
-
-const extractTitleText = (prop: unknown): string => {
-  if (!prop || typeof prop !== 'object') return '';
-  const title = (prop as { title?: NotionRichTextItem[] }).title;
-  if (!title) return '';
-  return title.map((t) => t.plain_text ?? '').join('').trim();
-};
-
-const extractRichText = (prop: unknown): string => {
-  if (!prop || typeof prop !== 'object') return '';
-  const rt = (prop as { rich_text?: NotionRichTextItem[] }).rich_text;
-  if (!rt) return '';
-  return rt.map((t) => t.plain_text ?? '').join('');
-};
-
-const extractNumber = (prop: unknown): number | null => {
-  if (!prop || typeof prop !== 'object') return null;
-  const n = (prop as { number?: number | null }).number;
-  // typeof NaN === 'number' を通さないよう Number.isFinite で defense-in-depth する。
-  // Notion API は number column に NaN を返さない想定だが、想定外入力で投稿文に NaN が混入する事故を防ぐ。
-  return typeof n === 'number' && Number.isFinite(n) ? n : null;
-};
-
-// Notion URL property を厳格に検証して返す。前後 whitespace は trim、http(s) 以外は reject。
-// Notion UI は URL field でも任意 string を受け入れるため (旧投稿文の coast → 誤入力で
-// `javascript:...` や plain text が混入する事故を防ぐ defense-in-depth)。
-const extractUrl = (prop: unknown): string | null => {
-  if (!prop || typeof prop !== 'object') return null;
-  const raw = (prop as { url?: string | null }).url;
-  if (typeof raw !== 'string') return null;
-  const trimmed = raw.trim();
-  if (!trimmed) return null;
-  if (!trimmed.startsWith('https://') && !trimmed.startsWith('http://')) return null;
-  return trimmed;
-};
 
 const isConfigured = (): boolean =>
   Boolean(process.env.NOTION_API_KEY) && Boolean(process.env.NOTION_FIXED_ASIN_DATA_SOURCE_ID);
