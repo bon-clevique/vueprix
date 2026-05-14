@@ -88,6 +88,16 @@ export const WATCH_BRANDS: readonly string[] = [
   'HARIO',     // HARIO (V60 等)
 ];
 
+// brand → NotionCategory map。WATCH_BRANDS に追加するブランドが non-kitchen 領域 (例: 貝印 の理容品 / 文房具系) に
+// 拡張されるとき、本 map に entry を増やすだけで brand-watch.ts は変更不要。
+// 未登録 brand への fallback は 'kitchen' (現運用は kitchen 中心のため穏当な default)。
+export const BRAND_CATEGORY_MAP: Record<string, NotionCategory> = {
+  Yamazaki: 'kitchen',
+  KAI: 'kitchen',
+  HARIO: 'kitchen',
+};
+export const BRAND_DEFAULT_CATEGORY: NotionCategory = 'kitchen';
+
 // brand あたりの 1 run 採用上限。CATEGORY_QUOTA とは独立枠 (deals 経路を圧迫しない)。
 // 3 brand × 2 件 = 6 件/run。MAX_POSTS_PER_RUN=30 に十分収まる。
 export const BRAND_QUOTA = 2;

@@ -350,4 +350,30 @@ describe('collectBrandHits', () => {
     expect(asins).not.toContain('B000000001');
     expect(asins).toContain('B000000002');
   });
+
+  // PR-B5: brand → category 紐づけが config の BRAND_CATEGORY_MAP 経由であることを pin down。
+  // WATCH_BRANDS (Yamazaki/KAI/HARIO) は全 'kitchen' map。新規 brand 追加 (例: 'Pilot' → 'stationery')
+  // を将来サポートする際の回帰防止として、map 経由のルーティングを test で固定する。
+  it('routes each WATCH_BRANDS hit to its category via BRAND_CATEGORY_MAP', async () => {
+    // 各 brand から 1 ASIN ずつ返す。axios call 順 = WATCH_BRANDS 順 (Yamazaki, KAI, HARIO)
+    // ASIN は 10 文字 alphanumeric (queryBrandAsins の filter)。
+    axiosPostMock
+      .mockResolvedValueOnce({ data: { asinList: ['B0YAMA0001'] } })
+      .mockResolvedValueOnce({ data: { asinList: ['B0KAI00002'] } })
+      .mockResolvedValueOnce({ data: { asinList: ['B0HARI0003'] } });
+    checkAsinMock.mockImplementation(async (asin: string) =>
+      okHistory(asin, 25, 1000),
+    );
+    const { collectBrandHits } = await import('./brand-watch.js');
+    const result = await collectBrandHits();
+    // 全 brand が 'kitchen' に解決される (BRAND_CATEGORY_MAP の現状定義)
+    expect(result).toHaveLength(3);
+    for (const c of result) {
+      expect(c.category).toBe('kitchen');
+    }
+    // ASIN 順は保証されないため Set 比較
+    expect(new Set(result.map((c) => c.asin))).toEqual(
+      new Set(['B0YAMA0001', 'B0KAI00002', 'B0HARI0003']),
+    );
+  });
 });

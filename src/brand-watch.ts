@@ -1,5 +1,7 @@
 import axios from 'axios';
 import {
+  BRAND_CATEGORY_MAP,
+  BRAND_DEFAULT_CATEGORY,
   BRAND_PAGE_SIZE,
   BRAND_QUOTA,
   DROP_THRESHOLD_PERCENT,
@@ -97,9 +99,9 @@ const evaluateBrandAsins = async (
         referencePrice: history.referencePrice,
         dropPercent: history.dropPercent,
         source: 'brand',
-        // 現状の WATCH_BRANDS (Yamazaki/KAI/HARIO) は全て kitchen 領域。将来 non-kitchen ブランドを
-        // WATCH_BRANDS に追加する際は brand → category map を config.ts に切り出す (本 PR では over-engineering)。
-        category: 'kitchen',
+        // brand → category 紐づけは config.ts の BRAND_CATEGORY_MAP で一元管理。
+        // 未登録 brand は BRAND_DEFAULT_CATEGORY (= 'kitchen') にフォールバック。
+        category: BRAND_CATEGORY_MAP[brand] ?? BRAND_DEFAULT_CATEGORY,
       });
     } catch (err) {
       logger.warn('brand-watch', 'checkAsin failed', {
