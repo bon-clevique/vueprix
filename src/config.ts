@@ -87,7 +87,7 @@ export const WATCH_BRANDS: readonly string[] = [
 ];
 
 // brand → NotionCategory map。WATCH_BRANDS に追加するブランドが non-kitchen 領域 (例: 貝印 の理容品 / 文房具系) に
-// 拡張されるとき、本 map に entry を増やすだけで brand-watch.ts は変更不要。
+// 拡張されるとき、本 map に entry を増やすだけで pipelines/brand.ts は変更不要。
 // 未登録 brand への fallback は 'kitchen' (現運用は kitchen 中心のため穏当な default)。
 export const BRAND_CATEGORY_MAP: Record<string, NotionCategory> = {
   Yamazaki: 'kitchen',

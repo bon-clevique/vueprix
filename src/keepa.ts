@@ -6,7 +6,7 @@ import { logger } from './logger.js';
 export const KEEPA_BASE = 'https://api.keepa.com';
 
 // Keepa /query endpoint response shape (asinsOnly=true で string[] を返す)。
-// brand-watch / verify-keepa-brand 等の caller が共通利用するため keepa.ts に集約。
+// pipelines/brand / verify-keepa-brand 等の caller が共通利用するため keepa.ts に集約。
 export interface KeepaQueryResponse {
   asinList?: string[];
   asins?: string[];

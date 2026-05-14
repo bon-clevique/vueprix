@@ -1,9 +1,7 @@
 import { randomBytes } from 'node:crypto';
 import { requirePartnerTag } from '../affiliate.js';
 import { loadBlocklist } from '../blocklist.js';
-import type { NotionCategory } from '../category.js';
 import {
-  CATEGORY_QUOTA,
   COOLDOWN_HOURS,
   MAX_POSTS_PER_RUN,
 } from '../config.js';
@@ -20,7 +18,7 @@ import { buildKeepaProduct, collectDeals } from '../pipelines/deals.js';
 import { collectFixed, publishFixedCandidates } from '../pipelines/fixed.js';
 import { collectBrandHits } from '../pipelines/brand.js';
 import { appendRunLog, type RunStatus } from '../run-log.js';
-import type { Candidate } from '../types.js';
+import { selectByQuota } from './quota.js';
 
 // @notionhq/client v5 の retry log は library 内部の console.warn で出る (実例:
 // "@notionhq/client warn: request fail" prefix)。これを集約して run-log の notion_retries に
@@ -38,31 +36,6 @@ if (!process.env.VITEST) {
     origWarn(...args);
   };
 }
-
-// Keepa deals 由来候補を CATEGORY_QUOTA に基づいて選別する。
-// - カテゴリ毎に dropPercent 降順で並べ、上位から quota 件数まで採用。
-// - 1 カテゴリが quota に満たない場合でも他カテゴリへ再分配しない (fail-safe)。
-// - fixed-list は quota 対象外 (本関数は呼び出し前に除外しておく)。
-export const selectByQuota = (
-  candidates: readonly Candidate[],
-  quota: Readonly<Record<NotionCategory, number>> = CATEGORY_QUOTA,
-): Candidate[] => {
-  const byCategory = new Map<NotionCategory, Candidate[]>();
-  for (const c of candidates) {
-    const list = byCategory.get(c.category) ?? [];
-    list.push(c);
-    byCategory.set(c.category, list);
-  }
-  const selected: Candidate[] = [];
-  for (const [category, list] of byCategory) {
-    const cap = quota[category] ?? 0;
-    if (cap <= 0) continue;
-    const sorted = [...list].sort((a, b) => b.dropPercent - a.dropPercent);
-    selected.push(...sorted.slice(0, cap));
-  }
-  // 決定性確保のため、最終結果も dropPercent 降順で安定化。
-  return selected.sort((a, b) => b.dropPercent - a.dropPercent);
-};
 
 // run の終了形態。partial = 一部 createDraftPage が失敗 (targets > 0 かつ drafted < targets)。
 // 完全成功 / 失敗ゼロは success、catch (err) に到達したら failure。
@@ -138,7 +111,7 @@ export const main = async (): Promise<void> => {
     const dealTargets = selectByQuota(dealsAfterActive);
 
     // brand 経路: 同じ blocklist + activeAsins フィルタを通すが、selectByQuota は通さない。
-    // brand-watch.ts 内で既に BRAND_QUOTA=2/brand で絞り済み (= 最大 6 件)。
+    // pipelines/brand.ts 内で既に BRAND_QUOTA=2/brand で絞り済み (= 最大 6 件)。
     // CATEGORY_QUOTA とは独立した枠として targets に合流させる (Spec §6.X "BRAND_QUOTA 分離")。
     const brandAfterBlocklist = brandCandidates.filter((c) => !blocklist.has(c.asin));
     const brandAfterActive = filterByActiveAsins(brandAfterBlocklist, activeAsins);
