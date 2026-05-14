@@ -11,7 +11,7 @@ import {
 } from './config.js';
 import { checkAsin, KEEPA_BASE, type KeepaQueryResponse } from './keepa.js';
 import { logger } from './logger.js';
-import type { Candidate } from './draft.js';
+import type { Candidate } from './types.js';
 
 const apiKey = (): string => {
   const key = process.env.KEEPA_API_KEY;
