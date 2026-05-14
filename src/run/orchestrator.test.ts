@@ -16,7 +16,7 @@ const appendHistoryMock = vi.fn();
 const readRecentAsinsMock = vi.fn();
 const collectBrandHitsMock = vi.fn();
 
-vi.mock('../brand-watch.js', () => ({
+vi.mock('../pipelines/brand.js', () => ({
   collectBrandHits: (...args: unknown[]) => collectBrandHitsMock(...args),
 }));
 

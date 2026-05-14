@@ -138,7 +138,7 @@ export const main = async (): Promise<void> => {
     const dealTargets = selectByQuota(dealsAfterActive);
 
     // brand 経路: 同じ blocklist + activeAsins フィルタを通すが、selectByQuota は通さない。
-    // brand-watch.ts 内で既に BRAND_QUOTA=2/brand で絞り済み (= 最大 6 件)。
+    // pipelines/brand.ts 内で既に BRAND_QUOTA=2/brand で絞り済み (= 最大 6 件)。
     // CATEGORY_QUOTA とは独立した枠として targets に合流させる (Spec §6.X "BRAND_QUOTA 分離")。
     const brandAfterBlocklist = brandCandidates.filter((c) => !blocklist.has(c.asin));
     const brandAfterActive = filterByActiveAsins(brandAfterBlocklist, activeAsins);
