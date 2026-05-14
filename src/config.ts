@@ -71,6 +71,10 @@ export const COOLDOWN_HOURS = 24;
 
 export const POST_HISTORY_PATH = "data/post-history.jsonl";
 
+// X (Twitter) 投稿文字数上限。Bluesky は 300 chars でより緩いが両 SNS に同じ text を投げるため厳しい方 (X) に合わせる。
+// fixed-templates.ts (composeFixedPostText) と publish.ts (deals/brand publish gate) が共通利用する single source of truth。
+export const POST_TEXT_MAX_CHARS = 280;
+
 // queryDuplicateAsins の Notion paging 上限。
 // page_size=100 × MAX_QUERY_PAGES = 1000 件。到達時は warn ログ + 切り上げ (要拡張シグナル)。
 export const MAX_QUERY_PAGES = 10;

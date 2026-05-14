@@ -1,5 +1,6 @@
 import 'dotenv/config';
 import { randomBytes } from 'node:crypto';
+import { POST_TEXT_MAX_CHARS } from './config.js';
 import { appendHistory } from './history.js';
 import { logger } from './logger.js';
 import {
@@ -76,11 +77,10 @@ export const main = async (argv: readonly string[]): Promise<void> => {
     return;
   }
 
-  // X の文字数上限 (280) を超える 投稿文 が Notion に書かれた場合、X は API エラー、Bluesky は成功する
-  // (Bluesky 300 chars 上限内のため)。anySucceeded(result) が true になり Status=posted に遷移し、
-  // X への投稿は永久に失われる silent data loss が発生する。両 SNS に確実に投稿する目的を守るため
-  // 280 chars 超は publish 全体を refuse する (再投稿可能なまま approved に残す)。
-  const POST_TEXT_MAX_CHARS = 280;
+  // X の文字数上限 (POST_TEXT_MAX_CHARS) を超える 投稿文 が Notion に書かれた場合、X は API エラー、
+  // Bluesky は成功する (Bluesky 300 chars 上限内のため)。anySucceeded(result) が true になり
+  // Status=posted に遷移し、X への投稿は永久に失われる silent data loss が発生する。両 SNS に
+  // 確実に投稿する目的を守るため上限超は publish 全体を refuse する (再投稿可能なまま approved に残す)。
   if ([...payload.postText].length > POST_TEXT_MAX_CHARS) {
     logger.warn('publish', '投稿文 exceeds X char limit, refusing to post', {
       pageId: args.pageId,

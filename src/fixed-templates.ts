@@ -1,10 +1,6 @@
+import { POST_TEXT_MAX_CHARS } from './config.js';
 import { logger } from './logger.js';
 import { buildClient } from './notion.js';
-
-// X (Twitter) 投稿文字数上限。Bluesky は 300 chars でより緩いが、両 SNS に同じ text を投げるため
-// 厳しい方 (X) に合わせる。publish.ts の POST_TEXT_MAX_CHARS と同値で意図的に重複定義 (本 module は
-// publish.ts に依存しない独立 path のため)。
-const POST_TEXT_MAX_CHARS = 280;
 
 // Notion 固定ASIN DB のスキーマ:
 //   - ASIN (title)
