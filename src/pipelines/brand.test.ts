@@ -16,7 +16,7 @@ vi.mock('axios', () => ({
 
 vi.mock('../keepa.js', () => ({
   checkAsin: checkAsinMock,
-  // brand-watch.ts は KEEPA_BASE を import するので mock にも export する。
+  // pipelines/brand.ts は KEEPA_BASE を import するので mock にも export する。
   // KeepaQueryResponse は type-only import (runtime export 不要、tsc では erased)。
   KEEPA_BASE: 'https://api.keepa.com',
 }));

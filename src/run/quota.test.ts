@@ -1,14 +1,15 @@
 import { describe, expect, it } from 'vitest';
+import type { NotionCategory } from '../category.js';
 import type { Candidate } from '../types.js';
 
 // PR-B (2026-05-14) で run/orchestrator.test.ts から本 file に切り出し。
 // selectByQuota は pure function で外部 I/O 依存なし → integration test (orchestrator.test.ts) から分離。
 
 describe('selectByQuota', () => {
-  type Cat = 'food' | 'health' | 'kitchen' | 'stationery' | 'pc-desk' | 'gaming' | 'audio' | 'fixed-list';
+  // category.ts の NotionCategory を直接参照 (旧 local Cat type duplicate を削除、PR-B review LOW-4 対応)。
   const buildCandidate = (overrides: Partial<{
     asin: string;
-    category: Cat;
+    category: NotionCategory;
     dropPercent: number;
   }> = {}): Candidate => ({
     asin: overrides.asin ?? 'B000TEST',
