@@ -2,6 +2,7 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import type { NotionCategory } from './category.js';
 import { POST_HISTORY_PATH } from './config.js';
+import { resolvePath } from './fs-utils.js';
 import { logger } from './logger.js';
 
 export interface PostHistoryEntry {
@@ -19,9 +20,6 @@ export interface PostHistoryEntry {
   category: NotionCategory;
   posters: Record<string, boolean>;
 }
-
-const resolvePath = (filePath: string): string =>
-  path.isAbsolute(filePath) ? filePath : path.resolve(process.cwd(), filePath);
 
 const truncateTitle = (title: string): string =>
   [...title.replace(/[\r\n]+/g, ' ')].slice(0, 200).join('');

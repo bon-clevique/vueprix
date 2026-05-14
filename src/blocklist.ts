@@ -1,5 +1,5 @@
 import { promises as fs } from 'node:fs';
-import path from 'node:path';
+import { resolvePath } from './fs-utils.js';
 import { logger } from './logger.js';
 
 // data/blocklist.md から「投稿しない ASIN」を読む。
@@ -11,9 +11,6 @@ import { logger } from './logger.js';
 const ASIN_LINE = /^\s*([A-Z0-9]{10})\b/;
 
 export const BLOCKLIST_PATH = 'data/blocklist.md';
-
-const resolvePath = (filePath: string): string =>
-  path.isAbsolute(filePath) ? filePath : path.resolve(process.cwd(), filePath);
 
 export const parseBlocklist = (content: string): Set<string> => {
   const result = new Set<string>();
