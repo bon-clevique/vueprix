@@ -406,3 +406,46 @@ export const queryDuplicateAsins = async (now: Date): Promise<Set<string>> => {
   return asins;
 };
 
+// Notion ブラックリスト DB から「2 度と紹介しない」ASIN を全件取得する。
+// queryDuplicateAsins と異なり Status / 日付 filter なし (登録の事実 = 恒久ブロック意図)。
+// env (NOTION_VUEPRIX_BLACKLIST_DATA_SOURCE_ID) 未設定時は warn + 空 Set で fail-safe
+// (DRY_RUN / 初期セットアップ / secret 登録忘れで run を止めない)。
+// Notion API 失敗は throw されて orchestrator の Promise.all で fatal catch (既存
+// queryDuplicateAsins と同じく Notion 不通は重大障害として可視化する方針)。
+export const queryBlacklistAsins = async (): Promise<Set<string>> => {
+  const dataSourceId = process.env.NOTION_VUEPRIX_BLACKLIST_DATA_SOURCE_ID;
+  if (!process.env.NOTION_API_KEY || !dataSourceId) {
+    logger.warn('notion', 'blacklist env not configured, returning empty set');
+    return new Set();
+  }
+  const client = buildClient();
+  const asins = new Set<string>();
+  let cursor: string | undefined;
+  let reachedCap = true;
+  for (let i = 0; i < MAX_QUERY_PAGES; i += 1) {
+    const res = (await client.dataSources.query({
+      data_source_id: dataSourceId,
+      page_size: 100,
+      ...(cursor ? { start_cursor: cursor } : {}),
+    })) as unknown as NotionQueryResult;
+    for (const page of res.results) {
+      const asin = extractRichText(page.properties.ASIN);
+      if (asin) asins.add(asin);
+    }
+    if (!res.has_more || !res.next_cursor) {
+      reachedCap = false;
+      break;
+    }
+    cursor = res.next_cursor;
+  }
+  if (reachedCap) {
+    logger.warn('notion', 'page cap reached', {
+      fn: 'queryBlacklistAsins',
+      maxPages: MAX_QUERY_PAGES,
+      collected: asins.size,
+    });
+  }
+  logger.info('notion', 'blacklist asins queried', { count: asins.size });
+  return asins;
+};
+

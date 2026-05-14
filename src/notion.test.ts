@@ -438,3 +438,93 @@ describe('queryDuplicateAsins', () => {
   });
 });
 
+describe('queryBlacklistAsins', () => {
+  const originalKey = process.env.NOTION_API_KEY;
+  const originalBl = process.env.NOTION_VUEPRIX_BLACKLIST_DATA_SOURCE_ID;
+
+  beforeEach(() => {
+    dataSourcesQueryMock.mockReset();
+    process.env.NOTION_API_KEY = 'secret_xxx';
+    process.env.NOTION_VUEPRIX_BLACKLIST_DATA_SOURCE_ID = 'ds-blacklist-456';
+  });
+
+  afterEach(() => {
+    if (originalKey === undefined) delete process.env.NOTION_API_KEY;
+    else process.env.NOTION_API_KEY = originalKey;
+    if (originalBl === undefined) delete process.env.NOTION_VUEPRIX_BLACKLIST_DATA_SOURCE_ID;
+    else process.env.NOTION_VUEPRIX_BLACKLIST_DATA_SOURCE_ID = originalBl;
+  });
+
+  it('returns empty set with warn log when env not configured (fail-safe)', async () => {
+    delete process.env.NOTION_VUEPRIX_BLACKLIST_DATA_SOURCE_ID;
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const { queryBlacklistAsins } = await import('./notion.js');
+    const result = await queryBlacklistAsins();
+    expect(result).toEqual(new Set());
+    expect(dataSourcesQueryMock).not.toHaveBeenCalled();
+    const lines = logSpy.mock.calls.map((c) => String(c[0]));
+    const warnLine = lines.find((l) => l.includes('blacklist env not configured'));
+    expect(warnLine).toBeDefined();
+    logSpy.mockRestore();
+  });
+
+  it('queries blacklist data source without filter and returns asin set', async () => {
+    dataSourcesQueryMock.mockResolvedValueOnce({
+      results: [
+        { id: 'p1', properties: { ASIN: { rich_text: [{ plain_text: 'B100' }] } } },
+        { id: 'p2', properties: { ASIN: { rich_text: [{ plain_text: 'B200' }] } } },
+      ],
+      has_more: false,
+    });
+    const { queryBlacklistAsins } = await import('./notion.js');
+    const result = await queryBlacklistAsins();
+    expect(result).toEqual(new Set(['B100', 'B200']));
+    const arg = dataSourcesQueryMock.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(arg.data_source_id).toBe('ds-blacklist-456');
+    // ブラックリストは登録の事実 = 恒久ブロック意図、Status / 日付 filter は不要
+    expect(arg.filter).toBeUndefined();
+    expect(arg.page_size).toBe(100);
+  });
+
+  it('paginates when has_more=true', async () => {
+    dataSourcesQueryMock
+      .mockResolvedValueOnce({
+        results: [{ id: 'p1', properties: { ASIN: { rich_text: [{ plain_text: 'B100' }] } } }],
+        has_more: true,
+        next_cursor: 'cursor-2',
+      })
+      .mockResolvedValueOnce({
+        results: [{ id: 'p2', properties: { ASIN: { rich_text: [{ plain_text: 'B200' }] } } }],
+        has_more: false,
+      });
+    const { queryBlacklistAsins } = await import('./notion.js');
+    const result = await queryBlacklistAsins();
+    expect(result).toEqual(new Set(['B100', 'B200']));
+    expect(dataSourcesQueryMock).toHaveBeenCalledTimes(2);
+    const secondArg = dataSourcesQueryMock.mock.calls[1]?.[0] as { start_cursor?: string };
+    expect(secondArg.start_cursor).toBe('cursor-2');
+  });
+
+  it('warns when MAX_QUERY_PAGES cap is reached', async () => {
+    dataSourcesQueryMock.mockResolvedValue({
+      results: [{ id: 'p', properties: { ASIN: { rich_text: [{ plain_text: 'B999' }] } } }],
+      has_more: true,
+      next_cursor: 'next',
+    });
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const { queryBlacklistAsins } = await import('./notion.js');
+    await queryBlacklistAsins();
+    expect(dataSourcesQueryMock).toHaveBeenCalledTimes(10);
+    const lines = logSpy.mock.calls.map((c) => String(c[0]));
+    const warnLine = lines.find((l) => l.includes('"page cap reached"') && l.includes('queryBlacklistAsins'));
+    expect(warnLine).toBeDefined();
+    logSpy.mockRestore();
+  });
+
+  it('propagates Notion API failure (fatal, matches queryDuplicateAsins policy)', async () => {
+    dataSourcesQueryMock.mockRejectedValueOnce(new Error('Notion 503'));
+    const { queryBlacklistAsins } = await import('./notion.js');
+    await expect(queryBlacklistAsins()).rejects.toThrow('Notion 503');
+  });
+});
+
