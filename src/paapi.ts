@@ -29,7 +29,8 @@ interface PaapiItem {
   };
 }
 
-interface PaapiResponse {
+// PaapiResponse は test に露出するため export。
+export interface PaapiResponse {
   ItemsResult?: { Items?: PaapiItem[] };
   Errors?: Array<{ Code: string; Message?: string; __type?: string }>;
 }
@@ -77,7 +78,9 @@ export const isRetryable = (err: unknown): boolean => {
   return typeof e.code === 'string' && RETRYABLE_NETWORK_CODES.has(e.code);
 };
 
-const buildBody = (asins: string[]): string =>
+// internal export: PR-C B4 で unit test 対象。本来は file-private で十分だが、
+// PartnerTag 等の env 統合と Resources の hardcode を pin する目的で test に露出。
+export const buildBody = (asins: string[]): string =>
   JSON.stringify({
     PartnerTag: env('PAAPI_PARTNER_TAG'),
     PartnerType: 'Associates',
@@ -136,7 +139,8 @@ const sendSigned = async (host: string, body: string): Promise<PaapiResponse> =>
   }
 };
 
-const parseProducts = (response: PaapiResponse): ProductInfo[] => {
+// internal export: PR-C B4 で unit test 対象。SavingBasis / Errors / null fallback の挙動を pin する。
+export const parseProducts = (response: PaapiResponse): ProductInfo[] => {
   if (response.Errors && response.Errors.length > 0) {
     const codes = response.Errors.map((e) => e.Code);
     logger.warn('paapi', 'partial errors', { codes, count: codes.length });
