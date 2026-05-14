@@ -408,10 +408,12 @@ export const queryDuplicateAsins = async (now: Date): Promise<Set<string>> => {
 
 // Notion ブラックリスト DB から「2 度と紹介しない」ASIN を全件取得する。
 // queryDuplicateAsins と異なり Status / 日付 filter なし (登録の事実 = 恒久ブロック意図)。
-// env (NOTION_VUEPRIX_BLACKLIST_DATA_SOURCE_ID) 未設定時は warn + 空 Set で fail-safe
-// (DRY_RUN / 初期セットアップ / secret 登録忘れで run を止めない)。
-// Notion API 失敗は throw されて orchestrator の Promise.all で fatal catch (既存
-// queryDuplicateAsins と同じく Notion 不通は重大障害として可視化する方針)。
+// 失敗時の挙動 (`blocklist.md` が file 失敗を warn + 空 Set で吸収するのと意図的に非対称):
+//   - env 未設定: warn + 空 Set。DRY_RUN / 初回 secret 登録忘れで run を止めない fail-safe
+//   - Notion API 失敗: throw され orchestrator の Promise.all で fatal catch。
+//     Notion DB は除外ソースの SoT で、API 不通時に空 Set を返すと「ブロック解除された」と
+//     誤って解釈されるリスクが高いため、run を止めて再実行で正確性を担保する
+//     (queryDuplicateAsins と統一)。
 export const queryBlacklistAsins = async (): Promise<Set<string>> => {
   const dataSourceId = process.env.NOTION_VUEPRIX_BLACKLIST_DATA_SOURCE_ID;
   if (!process.env.NOTION_API_KEY || !dataSourceId) {
