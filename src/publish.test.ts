@@ -241,4 +241,42 @@ describe('publish entrypoint', () => {
       main(['node', 'publish.ts', '--page-id', '0123456789abcdef0123456789abcdef']),
     ).resolves.toBeUndefined();
   });
+
+  // PR-B1: fetchPageById の必須 number property null は data quality error として
+  // process.exit(1) で fatal にする (silent warn return しない)。
+  it('process.exit(1) when セール価格 is null (data quality error, fail-fast)', async () => {
+    pagesRetrieveMock.mockResolvedValueOnce(
+      buildApprovedPage({ 'セール価格': { number: null } }),
+    );
+    const exitSpy = vi.spyOn(process, 'exit').mockImplementation(((_code?: number) => {
+      throw new Error('__exit__');
+    }) as never);
+    const { main } = await import('./publish.js');
+    await expect(
+      main(['node', 'publish.ts', '--page-id', '0123456789abcdef0123456789abcdef']),
+    ).rejects.toThrow('__exit__');
+    expect(exitSpy).toHaveBeenCalledWith(1);
+    // SNS 投稿は行われない
+    expect(xPostMock).not.toHaveBeenCalled();
+    expect(blueskyPostMock).not.toHaveBeenCalled();
+    exitSpy.mockRestore();
+  });
+
+  // PR-B1: status 不整合 (e.g. posted で publish 試行) は silent warn return のまま (data quality ではない)。
+  it('silent return (no exit) when status is posted (duplicate dispatch race)', async () => {
+    pagesRetrieveMock.mockResolvedValueOnce(
+      buildApprovedPage({ Status: { status: { name: 'posted' } } }),
+    );
+    const exitSpy = vi.spyOn(process, 'exit').mockImplementation(((_code?: number) => {
+      throw new Error('__exit__');
+    }) as never);
+    const { main } = await import('./publish.js');
+    await expect(
+      main(['node', 'publish.ts', '--page-id', '0123456789abcdef0123456789abcdef']),
+    ).resolves.toBeUndefined();
+    expect(exitSpy).not.toHaveBeenCalled();
+    expect(xPostMock).not.toHaveBeenCalled();
+    expect(blueskyPostMock).not.toHaveBeenCalled();
+    exitSpy.mockRestore();
+  });
 });

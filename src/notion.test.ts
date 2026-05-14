@@ -310,6 +310,43 @@ describe('fetchPageById', () => {
     const { fetchPageById } = await import('./notion.js');
     await expect(fetchPageById('page-1')).rejects.toThrow(/posted/);
   });
+
+  // PR-B1: 必須 number property が null/missing なら throw (fail-fast)。
+  // 旧 silent default 0 (extractNumber が `?? 0` を返した) を断つ目的。
+  it('throws when セール価格 is null (required number property fail-fast)', async () => {
+    pagesRetrieveMock.mockResolvedValueOnce(
+      buildPage('approved', { 'セール価格': { number: null } }),
+    );
+    const { fetchPageById } = await import('./notion.js');
+    await expect(fetchPageById('page-1')).rejects.toThrow(/セール価格/);
+  });
+
+  it('throws when 通常価格 property is missing entirely', async () => {
+    pagesRetrieveMock.mockResolvedValueOnce({
+      id: 'page-1',
+      properties: {
+        Status: { status: { name: 'approved' } },
+        ASIN: { rich_text: [{ plain_text: 'B0FKL' }] },
+        '名前': { title: [{ plain_text: 'x' }] },
+        '投稿文': { rich_text: [{ plain_text: 'text' }] },
+        'Amazon URL': { url: null },
+        'セール価格': { number: 850 },
+        // 通常価格 を意図的に省略
+        '割引率': { number: 0.15 },
+        'カテゴリ': { select: { name: 'food' } },
+      },
+    });
+    const { fetchPageById } = await import('./notion.js');
+    await expect(fetchPageById('page-1')).rejects.toThrow(/通常価格/);
+  });
+
+  it('throws when 割引率 is NaN (Number.isFinite check)', async () => {
+    pagesRetrieveMock.mockResolvedValueOnce(
+      buildPage('approved', { '割引率': { number: NaN } }),
+    );
+    const { fetchPageById } = await import('./notion.js');
+    await expect(fetchPageById('page-1')).rejects.toThrow(/割引率/);
+  });
 });
 
 describe('queryDuplicateAsins', () => {

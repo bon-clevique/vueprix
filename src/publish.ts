@@ -45,10 +45,22 @@ export const main = async (argv: readonly string[]): Promise<void> => {
   try {
     payload = await fetchPageById(args.pageId);
   } catch (err) {
-    // approved 以外で fetchPageById は throw する。二重発火 (既に posted) 等を early return で扱う。
+    const message = err instanceof Error ? err.message : String(err);
+    // fetchPageById は 2 種類の理由で throw する。
+    //   (a) Status 不整合 (approved 以外 / 未知の status) → 二重発火 / 運用ミス由来、silent return で抑止
+    //   (b) 必須 number property が null/NaN (PR B1 で導入) → Notion データ品質バグ、fatal にして気付かせる
+    // message に「セール価格」「通常価格」「割引率」のいずれかを含めば (b) と判定。
+    const isDataQualityError = /(セール価格|通常価格|割引率)/.test(message);
+    if (isDataQualityError) {
+      logger.error('publish', 'Notion data quality error, aborting', {
+        pageId: args.pageId,
+        error: message,
+      });
+      process.exit(1);
+    }
     logger.warn('publish', 'page not eligible for publish', {
       pageId: args.pageId,
-      error: err instanceof Error ? err.message : String(err),
+      error: message,
     });
     return;
   }
