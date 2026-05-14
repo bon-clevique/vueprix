@@ -86,6 +86,12 @@ describe('extractUrl', () => {
     expect(extractUrl({ url: '  https://example.com  ' })).toBe('https://example.com');
     expect(extractUrl({ url: 'http://example.com' })).toBe('http://example.com');
   });
+  // PR-A LOW-1: scheme は case-insensitive 比較。戻り値は元形保持 (path 部分も含む)。
+  it('accepts case-variant schemes (HTTPS://, Http://)', () => {
+    expect(extractUrl({ url: 'HTTPS://example.com/path' })).toBe('HTTPS://example.com/path');
+    expect(extractUrl({ url: 'Http://example.com' })).toBe('Http://example.com');
+    expect(extractUrl({ url: 'HtTpS://amzn.to/xxx' })).toBe('HtTpS://amzn.to/xxx');
+  });
   it('returns null for null/empty/whitespace', () => {
     expect(extractUrl({ url: null })).toBeNull();
     expect(extractUrl({ url: '' })).toBeNull();
@@ -98,6 +104,16 @@ describe('extractUrl', () => {
     expect(extractUrl({ url: 'ftp://example.com' })).toBeNull();
     expect(extractUrl({ url: 'plain text not a url' })).toBeNull();
     expect(extractUrl({ url: 'mailto:foo@bar.com' })).toBeNull();
+    // defense-in-depth: data: / file:// も reject
+    expect(extractUrl({ url: 'data:text/html,<script>alert(1)</script>' })).toBeNull();
+    expect(extractUrl({ url: 'file:///etc/passwd' })).toBeNull();
+  });
+  // scheme-only / 不正形式の reject
+  it('returns null for scheme without :// separator', () => {
+    expect(extractUrl({ url: 'http:foo' })).toBeNull();
+    expect(extractUrl({ url: 'https:' })).toBeNull();
+    // leading `:` (空 scheme) も reject
+    expect(extractUrl({ url: '://example.com' })).toBeNull();
   });
 });
 
