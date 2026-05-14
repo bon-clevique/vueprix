@@ -82,8 +82,12 @@ export const readRecentAsins = async (
       if (Number.isNaN(t)) continue;
       if (t >= cutoff) asins.add(entry.asin);
     } catch (err) {
+      // PR-A LOW-3: 運用 debug 時に「どの行が壊れたか」を特定できるよう先頭 100 文字を残す。
+      // post-history.jsonl は ASIN / title / price / posters 程度しか持たず PII / secret は
+      // そもそも入らないので preview の漏洩リスクなし。
       logger.warn('history', 'readRecentAsins malformed line, skipping', {
         error: err instanceof Error ? err.message : String(err),
+        linePreview: line.slice(0, 100),
       });
     }
   }
