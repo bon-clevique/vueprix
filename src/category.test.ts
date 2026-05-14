@@ -11,8 +11,9 @@ describe('mapKeepaCategoryToNotion', () => {
     { id: 2127209051, expected: 'pc-desk', label: 'パソコン・周辺機器' },
     { id: 637394, expected: 'gaming', label: 'ゲーム' },
     { id: 3477981, expected: 'audio', label: 'イヤホン・ヘッドホン本体' },
-    { id: 3833931, expected: 'kitchen', label: 'キッチン用品 (要 verify)' },
-    { id: 86893051, expected: 'stationery', label: '文房具・オフィス用品 (要 verify)' },
+    // 3833931 / 86893051 は PR-A B10 (2026-05-14) で削除。未マッピングなので fallback に落ちる。
+    { id: 3833931, expected: 'fixed-list', label: '3833931 (削除済 → fallback)' },
+    { id: 86893051, expected: 'fixed-list', label: '86893051 (削除済、果物 → fallback)' },
     { id: 999999999, expected: 'fixed-list', label: '未知カテゴリ → fallback' },
     { id: 0, expected: 'fixed-list', label: '0 (未マッピング) → fallback' },
   ];

@@ -19,8 +19,8 @@ export const FIXED_ASINS: readonly string[] = [
 //   2127209051 → パソコン・周辺機器 (6.4M, pc-desk)
 //   637394     → ゲーム (489K, gaming)
 //   3477981    → イヤホン・ヘッドホン本体 (93K, audio)
-//   3833931    → ホーム&キッチン > キッチン用品 (TBD: verify, kitchen)
-//   86893051   → 文房具・オフィス用品 (TBD: verify, stationery)
+// 3833931 / 86893051 は PR-A B10 (2026-05-14) で verify した結果、それぞれ Keepa response に
+// 存在せず / 「果物」(食品全体に包含) と判明したため削除。詳細: docs/notes/keepa-categories.md
 export const KEEPA_DOMAIN = 5;
 export const KEEPA_CATEGORIES: readonly number[] = [
   57239051,
@@ -28,8 +28,6 @@ export const KEEPA_CATEGORIES: readonly number[] = [
   2127209051,
   637394,
   3477981,
-  3833931,
-  86893051,
 ];
 
 // Keepa /deal sortType: 1 = 値下率の高い順 (試験運用、要 A/B)。
