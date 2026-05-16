@@ -1,4 +1,3 @@
-import { POST_TEXT_MAX_CHARS } from './config.js';
 import { logger } from './logger.js';
 import { buildClient } from './notion.js';
 import {
@@ -7,6 +6,7 @@ import {
   extractTitleText,
   extractUrl,
 } from './notion-extractors.js';
+import { exceedsXWeightedLimit } from './post-length.js';
 
 // Notion 固定ASIN DB のスキーマ:
 //   - ASIN (title)
@@ -92,7 +92,9 @@ const sanitizeForSns = (text: string): string =>
   text.replace(/(^|[\s　])@/gu, '$1＠');
 
 // 値下げ header + 紹介文 + アフィリエイト URL を結合して最終投稿文を組み立てる。
-// X 280 chars を超えたら null を返す (呼び出し側で skip + warn)。
+// X weighted 280 を超えたら null を返す (呼び出し側で skip + warn)。
+// 旧実装は code point ベースだったが、CJK / URL の重みを X 仕様 (twitter-text) に合わせるよう
+// post-length.ts の exceedsXWeightedLimit 経由に統一 (publish.ts と同じガード)。
 //
 // フォーマット:
 //   【{dropPercent}% OFF】{referenceYen} → {currentYen}
@@ -111,6 +113,6 @@ export const composeFixedPostText = (
   if (!trimmed) return null;
   const header = `【${dropPercent}% OFF】${formatYen(referencePrice)} → ${formatYen(currentPrice)}`;
   const composed = `${header}\n\n${trimmed}\n\n${affiliateUrl}`;
-  if ([...composed].length > POST_TEXT_MAX_CHARS) return null;
+  if (exceedsXWeightedLimit(composed)) return null;
   return composed;
 };
