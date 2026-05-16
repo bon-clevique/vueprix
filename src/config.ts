@@ -22,12 +22,21 @@ export const FIXED_ASINS: readonly string[] = [
 // 3833931 / 86893051 は PR-A B10 (2026-05-14) で verify した結果、それぞれ Keepa response に
 // 存在せず / 「果物」(食品全体に包含) と判明したため削除。詳細: docs/notes/keepa-categories.md
 export const KEEPA_DOMAIN = 5;
+// 各 ID の Keepa 上での妥当性は scripts/verify-keepa-categories.ts で確認すること。
+// docs/notes/keepa-categories.md に詳細。
+//
+// 3828871   → ホーム&キッチン (root, ~Amazon.co.jp 標準 browse node)
+// 159241011 → 文房具・オフィス用品 (root, ~Amazon.co.jp 標準 browse node)
+// 上記 2 ID は 2026 時点で Amazon.co.jp 上に長期存在する root browse node。Keepa /deal で
+// 0 件返却する場合は ID 変更があった可能性 → verify script で再確認する。
 export const KEEPA_CATEGORIES: readonly number[] = [
   57239051,
   160384011,
   2127209051,
   637394,
   3477981,
+  3828871,
+  159241011,
 ];
 
 // Keepa /deal sortType: 1 = 値下率の高い順 (試験運用、要 A/B)。
@@ -35,15 +44,17 @@ export const KEEPA_CATEGORIES: readonly number[] = [
 export const KEEPA_DEAL_SORT_TYPE = 1;
 
 // カテゴリごとの draft 上限 (Keepa deals 由来のみ。FIXED_ASINS はこの枠外で別途追加される)。
-// 合計 20 枠。1 カテゴリが空でも他に再分配しない (fail-safe / シンプル運用)。
+// 合計 38 枠 (base allocation)。capacity (MAX_POSTS_PER_RUN) を上回ったぶんは
+// quota.ts の Pass2 overflow が dropPercent 降順で再分配する。
+// 「中庸」プリセット (PR-volume-1) — 1 日 12 run x ~50 件で 月 X 投稿の余裕枠を確保。
 export const CATEGORY_QUOTA: Record<NotionCategory, number> = {
-  food: 5,
-  health: 3,
-  kitchen: 3,
-  stationery: 3,
-  'pc-desk': 3,
-  audio: 2,
-  gaming: 1,
+  food: 10,
+  health: 8,
+  kitchen: 5,
+  stationery: 5,
+  'pc-desk': 5,
+  audio: 3,
+  gaming: 2,
   'fixed-list': 0, // quota 対象外 (FIXED_ASINS は別経路で追加)
 };
 
@@ -62,8 +73,9 @@ export const CATEGORY_PRIORITY: readonly NotionCategory[] = [
 export const DROP_THRESHOLD_PERCENT = 15;
 export const HISTORY_DAYS = 90;
 
-// 安全装置 (PA-API / Notion 連打抑制)。CATEGORY_QUOTA 合計 + FIXED_ASINS 想定数を上回る値で運用。
-export const MAX_POSTS_PER_RUN = 30;
+// 安全装置 (PA-API / Notion 連打抑制)。CATEGORY_QUOTA 合計 + BRAND_QUOTA × WATCH_BRANDS + FIXED_ASINS 想定数を上回る値で運用。
+// quota.ts に capacity=MAX_POSTS_PER_RUN を渡すことで Pass2 overflow を解放、未消化カテゴリ枠を他カテゴリで埋める。
+export const MAX_POSTS_PER_RUN = 60;
 export const MIN_PRICE_YEN = 500;
 export const COOLDOWN_HOURS = 24;
 
@@ -80,10 +92,18 @@ export const MAX_QUERY_PAGES = 10;
 // Brand watch 経路の設定 (Spec docs/specs/brand-watch.html §6.X 参照)。
 // dry-run (scripts/verify-keepa-brand.ts) で確定した表記。漢字表記は Keepa の brand index に
 // 載っておらず英語表記のみ hit する (例: 山﨑実業 → "Yamazaki" 50 hits、"山崎実業"/"山﨑実業" は 0)。
+// scripts/verify-keepa-brand.ts で Keepa の brand index ヒット数を確認してから追加すること。
+// 漢字表記はヒットしない傾向 (例: 「山﨑実業」→0、「Yamazaki」→50)。英語名を優先。
 export const WATCH_BRANDS: readonly string[] = [
-  'Yamazaki',  // 山﨑実業 (tower シリーズ等)
-  'KAI',       // 貝印 (関孫六 等)
-  'HARIO',     // HARIO (V60 等)
+  'Yamazaki',     // 山﨑実業 (tower シリーズ等)
+  'KAI',          // 貝印 (関孫六 等)
+  'HARIO',        // HARIO (V60 等)
+  'KINTO',        // KINTO (キッチン雑貨)
+  'OXO',          // OXO (キッチンツール)
+  'ZOJIRUSHI',    // 象印 (魔法瓶 等)
+  'TIGER',        // タイガー魔法瓶
+  'Pyrex',        // パイレックス (耐熱ガラス)
+  'MUJI',         // 無印良品 (英語 brand 名で登録のもの)
 ];
 
 // brand → NotionCategory map。WATCH_BRANDS に追加するブランドが non-kitchen 領域 (例: 貝印 の理容品 / 文房具系) に
@@ -93,6 +113,12 @@ export const BRAND_CATEGORY_MAP: Record<string, NotionCategory> = {
   Yamazaki: 'kitchen',
   KAI: 'kitchen',
   HARIO: 'kitchen',
+  KINTO: 'kitchen',
+  OXO: 'kitchen',
+  ZOJIRUSHI: 'kitchen',
+  TIGER: 'kitchen',
+  Pyrex: 'kitchen',
+  MUJI: 'kitchen',
 };
 export const BRAND_DEFAULT_CATEGORY: NotionCategory = 'kitchen';
 

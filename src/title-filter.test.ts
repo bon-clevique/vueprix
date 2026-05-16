@@ -3,13 +3,39 @@ import { passesTitleWhitelist } from './title-filter.js';
 
 describe('passesTitleWhitelist', () => {
   describe('whitelist 未指定カテゴリ (素通し)', () => {
-    it('health はすべて通す', () => {
-      expect(passesTitleWhitelist('health', '何でもいい商品名')).toBe(true);
-      expect(passesTitleWhitelist('health', '')).toBe(true);
-    });
-
     it('fixed-list はすべて通す (FIXED_ASINS は別経路で扱われる前提)', () => {
       expect(passesTitleWhitelist('fixed-list', 'コーヒーフィルター')).toBe(true);
+    });
+  });
+
+  describe('health', () => {
+    it('オーラルケア / デンタル系を通す', () => {
+      expect(passesTitleWhitelist('health', 'クリニカ デンタルフロス Y字 18本')).toBe(true);
+      expect(passesTitleWhitelist('health', 'ライオン 歯磨き粉 チェックアップ')).toBe(true);
+    });
+
+    it('シャンプー / ボディソープ系を通す', () => {
+      expect(passesTitleWhitelist('health', 'ミノン 全身シャンプー')).toBe(true);
+      expect(passesTitleWhitelist('health', 'arau. ベビーハンドソープ')).toBe(true);
+    });
+
+    it('サプリ / ビタミン / 健康食品系を通す', () => {
+      expect(passesTitleWhitelist('health', 'DHC ビタミンC サプリ 60日分')).toBe(true);
+      expect(passesTitleWhitelist('health', 'プロテイン ホエイ 1kg')).toBe(true);
+      expect(passesTitleWhitelist('health', '日食 オートミール プレミアム')).toBe(true);
+    });
+
+    it('保湿 / 日焼け止め系を通す', () => {
+      expect(passesTitleWhitelist('health', 'ニベア ハンドクリーム 大')).toBe(true);
+      expect(passesTitleWhitelist('health', '日焼け止め SPF50+ ノンケミカル')).toBe(true);
+    });
+
+    it('該当キーワード無しは落とす', () => {
+      expect(passesTitleWhitelist('health', 'ガジェット ABC')).toBe(false);
+    });
+
+    it('空 title は落とす (whitelist 適用される)', () => {
+      expect(passesTitleWhitelist('health', '')).toBe(false);
     });
   });
 

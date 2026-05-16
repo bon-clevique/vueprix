@@ -20,11 +20,10 @@ const KEEPA_CATEGORY_MAP: Record<number, NotionCategory> = {
   2127209051: 'pc-desk', // パソコン・周辺機器 (verified 2026-05-06)
   637394: 'gaming',      // ゲーム (verified 2026-05-06)
   3477981: 'audio',      // イヤホン・ヘッドホン本体 (verified 2026-05-06)
-  // 3833931 / 86893051 は PR-A B10 (2026-05-14) で verify した結果、それぞれ
-  // Keepa response に存在せず / 「果物」で 57239051 (食品全体) に包含、と判明したため削除。
-  // 詳細: docs/notes/keepa-categories.md
-  // kitchen / stationery の NotionCategory 型 option は brand 経路 (BRAND_CATEGORY_MAP) と
-  // 将来拡張のため Notion select option として維持する。
+  // PR-volume-1: kitchen / stationery を deals 経路にも展開 (旧: brand 経路のみ)。
+  // scripts/verify-keepa-categories.ts で Keepa 上の name / productCount を検証してから運用。
+  3828871: 'kitchen',     // ホーム&キッチン (Amazon.co.jp root)
+  159241011: 'stationery',// 文房具・オフィス用品 (Amazon.co.jp root)
 };
 
 export const mapKeepaCategoryToNotion = (categoryId: number): NotionCategory =>

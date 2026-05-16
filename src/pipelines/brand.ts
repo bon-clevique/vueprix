@@ -105,6 +105,7 @@ const evaluateBrandAsins = async (
         // brand → category 紐づけは config.ts の BRAND_CATEGORY_MAP で一元管理。
         // 未登録 brand は BRAND_DEFAULT_CATEGORY (= 'kitchen') にフォールバック。
         category: BRAND_CATEGORY_MAP[brand] ?? BRAND_DEFAULT_CATEGORY,
+        referenceSource: history.referenceSource,
       });
     } catch (err) {
       logger.warn('pipelines/brand', 'checkAsin failed', {

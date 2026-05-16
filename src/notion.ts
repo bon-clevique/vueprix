@@ -1,6 +1,7 @@
 import { Client } from '@notionhq/client';
 import type { NotionCategory } from './category.js';
 import { COOLDOWN_HOURS, MAX_QUERY_PAGES } from './config.js';
+import type { ReferenceSource } from './keepa.js';
 import { logger } from './logger.js';
 import {
   extractDate,
@@ -109,6 +110,10 @@ export interface DraftCandidate {
   category: NotionCategory;
   generatedAt: Date;
   guidelineRelations?: readonly string[];
+  // referencePrice の出所。Notion 上では callout block として page 末尾に append され、
+  // bon が「Amazon UI の打消し線価格に依拠したコピー」と「Keepa 由来の最安値タイ系コピー」を
+  // 切り替える判断材料になる。schema 変更なし (block append のみ) なので Notion DB 側の追加作業不要。
+  referenceSource?: ReferenceSource | 'keepa' | 'manual-reference-price';
 }
 
 // fetchPageById は Status=approved の page しか返さない (それ以外は throw する) ので、
@@ -205,6 +210,77 @@ const appendPostBookmarks = async (
   return bookmarks.length;
 };
 
+// referenceSource を bon が判断しやすい日本語ラベル付き callout block として page 末尾に append する。
+// 「Amazon UI に打消し線が表示されているか」が値下げコピー採用の判断材料。
+const REFERENCE_SOURCE_LABEL: Record<string, { label: string; emoji: string; note: string }> = {
+  'paapi-saving-basis': {
+    emoji: '✅',
+    label: 'PA-API SavingBasis',
+    note: 'Amazon UI の打消し線価格と一致。値下げコピー OK。',
+  },
+  'manual-reference-price': {
+    emoji: '✏️',
+    label: 'Notion 手動入力 参考定価',
+    note: '固定ASIN 用に bon が設定した希望小売価格。Amazon UI 表示は要確認。',
+  },
+  'list-price': {
+    emoji: '⚠️',
+    label: 'Keepa 90日 List Price',
+    note: 'Amazon UI に打消し線が無い可能性。「過去最安値タイ」「平均比 -X%」系コピー推奨。',
+  },
+  'amazon-avg': {
+    emoji: '⚠️',
+    label: 'Keepa 90日 Amazon 平均',
+    note: 'Amazon UI に打消し線が無い可能性。「過去最安値タイ」「平均比 -X%」系コピー推奨。',
+  },
+  'new-avg': {
+    emoji: '⚠️',
+    label: 'Keepa 90日 New 平均',
+    note: 'Amazon UI に打消し線が無い可能性。「過去最安値タイ」「平均比 -X%」系コピー推奨。',
+  },
+  'week-avg': {
+    emoji: '⚠️',
+    label: 'Keepa 週平均',
+    note: 'Amazon UI に打消し線が無い可能性。「過去最安値タイ」「平均比 -X%」系コピー推奨。',
+  },
+  'min-90d': {
+    emoji: '⚠️',
+    label: 'Keepa 90日最安値',
+    note: 'Amazon UI に打消し線が無い可能性。「過去最安値タイ」「平均比 -X%」系コピー推奨。',
+  },
+  keepa: {
+    emoji: '⚠️',
+    label: 'Keepa fallback',
+    note: 'Amazon UI に打消し線が無い可能性。「過去最安値タイ」「平均比 -X%」系コピー推奨。',
+  },
+};
+
+const appendReferenceSourceCallout = async (
+  client: Client,
+  pageId: string,
+  referenceSource: string,
+): Promise<void> => {
+  const meta = REFERENCE_SOURCE_LABEL[referenceSource] ?? {
+    emoji: 'ℹ️',
+    label: referenceSource,
+    note: '',
+  };
+  const text = `参考価格ソース: ${meta.label}${meta.note ? ` — ${meta.note}` : ''}`;
+  await client.blocks.children.append({
+    block_id: pageId,
+    children: [
+      {
+        object: 'block',
+        type: 'callout',
+        callout: {
+          icon: { type: 'emoji', emoji: meta.emoji },
+          rich_text: [{ type: 'text', text: { content: text } }],
+        },
+      },
+    ],
+  });
+};
+
 // Status=backlog として candidate を 1 page 作成。page id を返す。
 // approval workflow の起点。Notion automation が Status=approved に変更すると repository_dispatch が発火する。
 export const createDraftPage = async (draft: DraftCandidate): Promise<string> => {
@@ -222,6 +298,19 @@ export const createDraftPage = async (draft: DraftCandidate): Promise<string> =>
     },
   });
   const pageId = (res as { id: string }).id;
+  // referenceSource を callout として page 末尾に append (schema 変更不要、bon の判断材料用)。
+  // 失敗しても draft 作成自体は live なので warn ログのみで continue する。
+  if (draft.referenceSource) {
+    try {
+      await appendReferenceSourceCallout(client, pageId, draft.referenceSource);
+    } catch (err) {
+      logger.warn('notion', 'append reference source callout failed', {
+        asin: draft.asin,
+        pageId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
   logger.info('notion', 'draft page created', { asin: draft.asin, pageId, category: draft.category });
   return pageId;
 };
@@ -245,6 +334,17 @@ export const createPostedPage = async (
     },
   });
   const pageId = (res as { id: string }).id;
+  if (draft.referenceSource) {
+    try {
+      await appendReferenceSourceCallout(client, pageId, draft.referenceSource);
+    } catch (err) {
+      logger.warn('notion', 'append reference source callout failed', {
+        asin: draft.asin,
+        pageId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
   const bookmarkCount = await appendPostBookmarks(client, pageId, links);
   logger.info('notion', 'posted page created', {
     asin: draft.asin,
