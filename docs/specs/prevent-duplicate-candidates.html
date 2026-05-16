@@ -1,0 +1,623 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <title>Spec: prevent-duplicate-candidates</title>
+  <script type="module">
+    import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.esm.min.mjs';
+    mermaid.initialize({ startOnLoad: true, theme: 'default' });
+  </script>
+  <style>
+    :root {
+      --bg-primary: #0a1020;
+      --bg-surface: #121a30;
+      --bg-surface-alt: #1a2440;
+      --border: #2a3550;
+      --text-primary: #e8eaf0;
+      --text-secondary: #b8bccc;
+      --text-tertiary: #8a9aab;
+      --accent-ember: #ff8c42;
+      --risk-high: #ff5a6e;
+      --risk-med: #ffb547;
+      --risk-low: #8a9aab;
+    }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      margin: 0;
+      padding: 0;
+      line-height: 1.6;
+      color: var(--text-primary);
+      background: var(--bg-primary);
+    }
+    h1 { border-bottom: 2px solid var(--accent-ember); padding-bottom: 0.3em; color: var(--text-primary); }
+    h2 { color: var(--text-primary); margin-top: 1.8em; border-left: 4px solid var(--accent-ember); padding-left: 0.5em; }
+    h3 { color: var(--text-secondary); }
+    a { color: var(--accent-ember); }
+    code { background: var(--bg-surface-alt); padding: 0.1em 0.4em; border-radius: 3px; font-size: 0.9em; color: var(--text-primary); }
+    pre { background: var(--bg-surface-alt); padding: 1em; border-radius: 5px; overflow-x: auto; color: var(--text-primary); }
+    pre code { background: transparent; padding: 0; }
+    blockquote { border-left: 3px solid var(--accent-ember); padding-left: 1em; color: var(--text-secondary); font-style: italic; }
+
+    .layout {
+      display: flex;
+      flex-direction: column;
+      max-width: 1100px;
+      margin: 0 auto;
+      padding: 0;
+    }
+    .toc {
+      position: sticky;
+      top: 0;
+      z-index: 100;
+      border-bottom: 1px solid var(--border);
+      padding: 1rem 3rem;
+      margin: 0;
+      backdrop-filter: blur(8px);
+      background: rgba(10, 16, 32, 0.85);
+    }
+    .toc-inner {
+      max-width: 1100px;
+      margin: 0 auto;
+      display: flex;
+      gap: 0;
+      flex-wrap: wrap;
+      align-items: stretch;
+    }
+    .toc a {
+      display: inline-flex;
+      align-items: center;
+      padding: 0.6em 1.1em;
+      border: none;
+      border-bottom: 2px solid transparent;
+      background: transparent;
+      color: var(--text-tertiary);
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.8rem;
+      text-decoration: none;
+      transition: all 0.15s;
+      margin-right: 0;
+    }
+    .toc a:hover {
+      color: var(--text-primary);
+      border-bottom-color: var(--accent-ember);
+      background: rgba(255, 140, 66, 0.05);
+    }
+    .toc a.active {
+      color: var(--accent-ember);
+      border-bottom-color: var(--accent-ember);
+    }
+    .content {
+      padding: 3rem;
+      max-width: 1100px;
+      margin: 0 auto;
+    }
+
+    dl.glossary {
+      background: var(--bg-surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 1em 1.5em;
+      margin: 1em 0;
+    }
+    dl.glossary dt {
+      font-family: 'JetBrains Mono', monospace;
+      font-weight: 700;
+      color: var(--accent-ember);
+      margin-top: 0.75em;
+    }
+    dl.glossary dt:first-child { margin-top: 0; }
+    dl.glossary dd {
+      margin: 0.25em 0 0 0;
+      color: var(--text-secondary);
+    }
+
+    .da-block {
+      background: var(--bg-surface-alt);
+      border: 1px solid var(--border);
+      border-left: 3px solid var(--accent-ember);
+      border-radius: 8px;
+      padding: 1.25em 1.5em;
+      margin: 1em 0;
+    }
+    .da-block h3 {
+      margin-top: 0;
+      margin-bottom: 0.5em;
+      font-size: 1rem;
+      color: var(--text-primary);
+    }
+    .da-block p {
+      margin: 0;
+      color: var(--text-secondary);
+    }
+
+    .risk-card {
+      background: var(--bg-surface);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 1.25em 1.5em;
+      margin: 1em 0;
+    }
+    .risk-card-header {
+      display: flex;
+      align-items: center;
+      gap: 0.75em;
+      margin-bottom: 0.75em;
+      padding-bottom: 0.75em;
+      border-bottom: 1px solid var(--border);
+    }
+    .risk-card-title {
+      font-weight: 600;
+      color: var(--text-primary);
+    }
+    .risk-badge {
+      display: inline-block;
+      padding: 0.15em 0.7em;
+      border-radius: 999px;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.7rem;
+      font-weight: 700;
+      letter-spacing: 0.05em;
+    }
+    .risk-badge.risk-high { background: rgba(255,90,110,0.15); color: var(--risk-high); border: 1px solid rgba(255,90,110,0.3); }
+    .risk-badge.risk-med  { background: rgba(255,181,71,0.15); color: var(--risk-med); border: 1px solid rgba(255,181,71,0.3); }
+    .risk-badge.risk-low  { background: rgba(138,154,171,0.15); color: var(--risk-low); border: 1px solid rgba(138,154,171,0.3); }
+    .risk-card-body { margin: 0; }
+    .risk-card-body dt {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.75rem;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: var(--text-tertiary);
+      margin-top: 0.75em;
+    }
+    .risk-card-body dt:first-child { margin-top: 0; }
+    .risk-card-body dd {
+      margin: 0.25em 0 0 0;
+      color: var(--text-secondary);
+    }
+
+    section.card {
+      margin-bottom: 2em;
+    }
+  </style>
+</head>
+<body>
+  <div class="layout">
+    <nav class="toc">
+      <div class="toc-inner">
+        <a href="#s1">01 Context</a>
+        <a href="#s1-5">1.5 Glossary</a>
+        <a href="#s2">02 Goal</a>
+        <a href="#s2-5">2.5 Big Picture</a>
+        <a href="#s3">03 Non-Goal</a>
+        <a href="#s4">04 Acceptance</a>
+        <a href="#s5">05 DA</a>
+        <a href="#s6">06 Design</a>
+        <a href="#s7">07 Risks</a>
+        <a href="#s8">08 OoS</a>
+      </div>
+    </nav>
+    <main class="content">
+      <h1>Spec: prevent-duplicate-candidates</h1>
+
+      <p><em>vueprix bot の候補生成における「同一商品の繰り返し露出」と「永久に紹介しない商品の制御」を強化する設計。(1) <code>COOLDOWN_HOURS</code> を 24h → 720h (30 日) に延長、(2) Notion 上に「ブラックリスト DB」を新設して恒久ブロック ASIN を bon が UI から管理可能にする。追加課金ゼロ (Notion Free / Keepa Pro 範囲内)。</em></p>
+
+      <section class="card" id="s1">
+        <h2>1. Context (背景)</h2>
+        <p>運用観測 (2026-05-14 時点) で 2 つの不満が顕在化した:</p>
+        <ul>
+          <li><strong>同じ ASIN が何度も candidate に上がる</strong>: 現状 <code>COOLDOWN_HOURS = 24</code> (<code>src/config.ts:68</code>) で、24h 経過した posted ASIN は再度候補化される。値下げが継続している商品は cron (2h ごと、1 日 12 回) で頻繁に再ヒットし、bon が Notion で <code>rejected</code> しても 24h 後にまた backlog として戻ってくる。</li>
+          <li><strong>「2 度と紹介したくない商品」の管理が PR 必須で運用負荷が高い</strong>: 既存の恒久ブロックは <code>data/blocklist.md</code> (<code>src/blocklist.ts</code>) のみで、PR 作成 + merge が必要。bon が Notion UI から即時ブロックできる経路がない。</li>
+        </ul>
+        <p>関連実装: <code>queryDuplicateAsins</code> (<code>src/notion.ts:352</code>) と <code>readRecentAsins</code> (<code>src/history.ts:54</code>) が cooldown 内 ASIN を union して <code>activeAsins</code> を構成 (<code>src/run/orchestrator.ts:78-83</code>)、<code>loadBlocklist</code> (<code>src/blocklist.ts:30</code>) が deals / fixed / brand 全経路で除外する。本 spec はこの 2 機構の <strong>パラメータ拡張</strong> と <strong>ソース追加</strong> でほぼ完結する小規模変更。</p>
+      </section>
+
+      <section class="card" id="s1-5">
+        <h2>1.5 Glossary</h2>
+        <dl class="glossary">
+          <dt>COOLDOWN_HOURS</dt>
+          <dd>posted / rejected 以外 (backlog/doing/approved/posted) の ASIN を「直近 N 時間以内に候補化済」とみなして二重投稿を防ぐ閾値。現行 24h、本 spec で 720h (30 日) に拡張。</dd>
+          <dt>activeAsins</dt>
+          <dd>orchestrator が run 開始時に組み立てる「除外対象 ASIN 集合」。<code>queryDuplicateAsins</code> (Notion DB primary) ∪ <code>readRecentAsins</code> (post-history.jsonl secondary) で構成。本 spec では <strong>ここに <code>queryBlacklistAsins</code> も union する</strong>。</dd>
+          <dt>data/blocklist.md</dt>
+          <dd>既存の Markdown ベース永久ブロックリスト。git 履歴で理由が追跡可能、PR レビューに馴染む。本 spec で廃止せず併用 (二重管理ではなく「役割分離」)。</dd>
+          <dt>Notion ブラックリスト DB</dt>
+          <dd>本 spec で新設。bon が Notion UI から「2 度と紹介しない」と判断した ASIN を即時登録できる場所。schema: ASIN (rich_text, required) / 商品名 (title) / 理由 (rich_text) / 登録日 (date, auto)。</dd>
+          <dt>MAX_QUERY_PAGES</dt>
+          <dd>Notion API paging 上限 (<code>src/config.ts:78</code>)。現行 10 (= page_size 100 × 10 = 1,000 件)。本 spec の cooldown 拡張で <code>queryDuplicateAsins</code> 結果が 1,000 件に近づく可能性があるため監視ポイント。</dd>
+          <dt>rejected</dt>
+          <dd>Notion DB の Status option の 1 つ。ADR-003 で「ガイドライン残しつつ将来の再候補化を許可」と定義済。本 spec では rejected の意味を変更せず、別 DB として恒久ブラックリストを新設する (案 B)。</dd>
+        </dl>
+      </section>
+
+      <section class="card" id="s2">
+        <h2>2. Goal</h2>
+        <p>GitHub Actions cron (2h ごと) が走るたびに、次の 2 条件を満たす ASIN を <strong>候補から除外</strong>する:</p>
+        <ol>
+          <li><strong>過去 30 日以内</strong>に Notion DB に作成された ASIN (Status ∈ {backlog, doing, approved, posted}) または post-history.jsonl に投稿記録のある ASIN — <code>COOLDOWN_HOURS = 720</code> で実現</li>
+          <li><strong>Notion ブラックリスト DB</strong> に登録された ASIN (登録時期問わず恒久) — 新規 <code>queryBlacklistAsins</code> で取得し <code>activeAsins</code> に union</li>
+        </ol>
+        <p>追加課金: <strong>なし</strong>。Notion API は無料枠 (3 req/sec rate limit) で十分、Keepa/PA-API/Claude/X/Bluesky の call 数は変動なし (むしろ除外で微減)。</p>
+      </section>
+
+      <section class="card" id="s2-5">
+        <h2>2.5 Goal 達成後の全体像 (Big Picture)</h2>
+        <p><em>Goal 達成後、bon が「2 度と紹介しない」運用判断を Notion UI で完結させる流れ。</em></p>
+
+        <h3>2.5.1 Flow A: ブラックリスト追加 (bon の運用導線)</h3>
+        <p><em>bon が「この商品はもう紹介しない」と判断した時の操作。</em></p>
+        <pre class="mermaid">
+sequenceDiagram
+    autonumber
+    actor Bon
+    participant Notion as Notion ブラックリスト DB
+    participant Cron as GitHub Actions (next run)
+    participant Orch as orchestrator.ts
+
+    Bon-&gt;&gt;Notion: 新規ページ作成 (ASIN + 理由)
+    Note over Bon,Notion: 既存 candidate を rejected にした<br/>+ ブラックリスト DB にも転記
+    Cron-&gt;&gt;Orch: 2h 後の cron 起動
+    Orch-&gt;&gt;Notion: queryBlacklistAsins()
+    Notion--&gt;&gt;Orch: blacklist Set
+    Orch-&gt;&gt;Orch: activeAsins ∪ blacklist
+    Note over Orch: 当該 ASIN は永久に candidate にならない
+        </pre>
+
+        <h3>2.5.2 Flow B: cron 1 run の実行 (拡張後の全体像)</h3>
+        <p><em>除外ソースが 4 つに増えるが、orchestrator の構造は維持。</em></p>
+        <pre class="mermaid">
+sequenceDiagram
+    autonumber
+    participant Cron as GitHub Actions
+    participant Orch as orchestrator.main()
+    participant Notion as Notion API
+    participant FS as data/*.{md,jsonl}
+    participant Keepa as Keepa API
+
+    Cron-&gt;&gt;Orch: 2h cron 起動
+    par 除外ソース並列取得
+        Orch-&gt;&gt;FS: loadBlocklist() [blocklist.md]
+        Orch-&gt;&gt;Notion: queryDuplicateAsins() [30 日 cooldown]
+        Orch-&gt;&gt;FS: readRecentAsins() [post-history.jsonl, 30 日]
+        Orch-&gt;&gt;Notion: queryBlacklistAsins() [NEW]
+    end
+    Notion--&gt;&gt;Orch: dup Set
+    FS--&gt;&gt;Orch: blocklist Set
+    FS--&gt;&gt;Orch: history Set
+    Notion--&gt;&gt;Orch: blacklist Set [NEW]
+    Orch-&gt;&gt;Orch: activeAsins = ∪(dup, history, blacklist)<br/>blocklist は別変数 (既存)
+    Orch-&gt;&gt;Keepa: collectDeals / collectFixed / collectBrandHits
+    Keepa--&gt;&gt;Orch: candidates
+    Orch-&gt;&gt;Orch: filter (blocklist ∪ activeAsins) → targets
+    Orch-&gt;&gt;Notion: createDraftPage × N
+        </pre>
+
+        <h3>2.5.3 Flow C: 30 日 cooldown 内 ASIN の挙動</h3>
+        <p><em>cooldown 内の re-hit が静かに無視される様子。</em></p>
+        <pre class="mermaid">
+sequenceDiagram
+    autonumber
+    participant Cron as GitHub Actions
+    participant Orch as orchestrator
+    participant Keepa as Keepa /deal
+    participant Notion as Notion DB
+
+    Note over Cron: Day 1: ASIN=X が値下げ
+    Cron-&gt;&gt;Keepa: collectDeals
+    Keepa--&gt;&gt;Cron: [..., X, ...]
+    Cron-&gt;&gt;Notion: createDraftPage(X) → Status=backlog
+    Note over Cron: Day 5: ASIN=X がまだ値下げ中
+    Cron-&gt;&gt;Notion: queryDuplicateAsins(cutoff = Day 5 - 30d)
+    Notion--&gt;&gt;Cron: { X, ... } (X は Day 1 投入なので含まれる)
+    Cron-&gt;&gt;Cron: X は activeAsins に含まれ filter で除外
+    Note over Cron: Day 32: 30 日経過、X は cooldown 外
+    Cron-&gt;&gt;Notion: queryDuplicateAsins(cutoff = Day 32 - 30d)
+    Notion--&gt;&gt;Cron: { ... } (X は含まれない)
+    Cron-&gt;&gt;Notion: createDraftPage(X) → 再候補化 OK
+        </pre>
+
+        <h3>2.5.X 規律の責務分担</h3>
+        <ul>
+          <li><strong>Bon (user)</strong>: 恒久ブロック判断 / Notion ブラックリスト DB へのページ追加 / 既存 candidate の rejected 遷移</li>
+          <li><strong>c2 main</strong>: <code>COOLDOWN_HOURS</code> 拡張 / <code>queryBlacklistAsins</code> 実装 / orchestrator の union 拡張 / test 追加</li>
+          <li><strong>queryBlacklistAsins</strong>: Notion ブラックリスト DB を paging で全取得し ASIN Set を返す (filter なし、全件取得)</li>
+          <li><strong>既存 loadBlocklist / queryDuplicateAsins / readRecentAsins</strong>: 変更なし (1 機能 1 ソースの原則を維持)</li>
+        </ul>
+      </section>
+
+      <section class="card" id="s3">
+        <h2>3. Non-Goal</h2>
+        <ul>
+          <li><strong>既存 <code>data/blocklist.md</code> の廃止</strong>: 並行運用する。md は git 履歴で「なぜブロックしたか」が PR レビューに残る価値があり、Notion DB は bon の UI 導線として併用</li>
+          <li><strong>rejected status の意味変更</strong>: ADR-003 で「価格再下落時の再候補化を許可」と決めた挙動を維持する。恒久ブロックは <strong>別 DB</strong> として実装 (案 A は採用しない)</li>
+          <li><strong>Notion ブラックリスト DB の自動同期 (md ↔ DB)</strong>: 双方向同期は複雑度に見合わない。bon が必要なら md と DB の両方に手動登録 (運用判断)</li>
+          <li><strong>category / brand 単位の恒久ブロック</strong>: 当面は ASIN 単位のみ。category/brand 単位の除外は <code>CATEGORY_QUOTA=0</code> や <code>WATCH_BRANDS</code> 削除で代替可能</li>
+          <li><strong>cooldown 日数のカテゴリ別差分化</strong>: 全 ASIN 一律 30 日。category/source ごとの可変 cooldown は将来検討</li>
+          <li><strong>ブラックリスト追加の slash command / bot UI 化</strong>: Notion UI 直接編集で十分</li>
+        </ul>
+      </section>
+
+      <section class="card" id="s4">
+        <h2>4. Acceptance Scenarios (Gherkin)</h2>
+
+        <h3>4.1 Scenario A1: 30 日 cooldown で同 ASIN が再候補化されない</h3>
+        <pre><code>Scenario A1: 30-day cooldown via COOLDOWN_HOURS=720
+  Given COOLDOWN_HOURS = 720 (= 30 日)
+  And   ASIN=X が 10 日前に Notion DB に Status=posted で投入されている
+  When  cron `npm start` が走る (orchestrator.main)
+  Then  queryDuplicateAsins() は X を含む Set を返す
+  And   activeAsins.has(X) が true
+  And   collectDeals 結果に X が含まれていても filter で除外される
+  And   createDraftPage(X) は呼ばれない</code></pre>
+
+        <h3>4.2 Scenario A2: 31 日経過後は再候補化が許可される</h3>
+        <pre><code>Scenario A2: cooldown expiry
+  Given COOLDOWN_HOURS = 720
+  And   ASIN=Y が 31 日前に Notion DB に Status=posted で投入されている
+  And   Y がブラックリスト DB に登録されていない
+  When  cron が走る
+  Then  queryDuplicateAsins() の cutoff (now - 720h) より Y の候補生成日時が古い
+  And   Y は activeAsins に含まれない
+  And   Y が値下げ中なら createDraftPage(Y) で新規 backlog として再投入される</code></pre>
+
+        <h3>4.3 Scenario A3: Notion ブラックリスト DB の ASIN は永久に除外</h3>
+        <pre><code>Scenario A3: permanent blacklist via Notion DB
+  Given NOTION_VUEPRIX_BLACKLIST_DATA_SOURCE_ID が GitHub Actions secrets に設定済
+  And   Notion ブラックリスト DB に ASIN=Z のページが存在 (登録日問わず)
+  When  cron が走る
+  Then  queryBlacklistAsins() が Z を含む Set を返す
+  And   activeAsins に Z が union される
+  And   deals/fixed/brand いずれの経路で Z が hit しても filter で除外される
+  And   1 年経過後 (cooldown 外) でも Z は除外され続ける</code></pre>
+
+        <h3>4.4 Scenario A4: ブラックリスト DB と blocklist.md は OR で適用</h3>
+        <pre><code>Scenario A4: dual permanent-block sources
+  Given ASIN=P1 は data/blocklist.md にのみ存在
+  And   ASIN=P2 は Notion ブラックリスト DB にのみ存在
+  And   ASIN=P3 は両方に存在
+  When  cron が走る
+  Then  loadBlocklist() は {P1, P3} を返す
+  And   queryBlacklistAsins() は {P2, P3} を返す
+  And   いずれの ASIN も最終 targets に含まれない</code></pre>
+
+        <h3>4.5 Scenario A5: Notion ブラックリスト DB の env 未設定で fail-safe</h3>
+        <pre><code>Scenario A5: missing env var degrades gracefully
+  Given NOTION_VUEPRIX_BLACKLIST_DATA_SOURCE_ID が未設定 (空文字 or undefined)
+  When  cron が走る
+  Then  queryBlacklistAsins() は warn ログを出して空 Set を返す
+  And   run は failure にならず success/partial で完了する
+  And   既存 blocklist.md / cooldown による除外は通常通り機能する</code></pre>
+
+        <h3>4.6 Scenario A6: Notion API 失敗時の挙動</h3>
+        <pre><code>Scenario A6: Notion API failure isolation
+  Given Notion API が 5xx or timeout を返す
+  When  Promise.all 内の queryBlacklistAsins() が reject する
+  Then  既存仕様 (queryDuplicateAsins と同じ) に従い orchestrator は fatal として catch
+  And   run-log の status = 'failure'
+  And   process.exit(1) で cron 失敗を可視化
+  # Notion 不通は重大障害として上に伝える方針 (既存 queryDuplicateAsins と統一)</code></pre>
+      </section>
+
+      <section class="card" id="s5">
+        <h2>5. Devil's Advocate</h2>
+
+        <div class="da-block">
+          <h3>5.1 前提は正しいか</h3>
+          <p>前提 1: 「同じ ASIN が 24h で再候補化されるのは害」— 値下げ継続中は本来「再ヒット = 良情報」だが、bon の Notion ワークロード (毎日同じ商品を rejected する手間) が大きく、転換率の高い新規発見が埋もれる害の方が上回ると判断。<strong>30 日が適切か</strong>は経験則 (一般的にセール周期 = 月 1) で、運用 1 ヶ月後に統計レビューして 14 日 / 60 日に調整可能 (1 行変更)。前提 2: 「Notion UI からブラックリスト登録したい」— bon の運用負荷直接観測。md PR の往復より UI 編集が速いのは明白。</p>
+        </div>
+
+        <div class="da-block">
+          <h3>5.2 もっと簡単な代替案はあるか</h3>
+          <p><strong>代替案 A (rejected を恒久化)</strong>: 既存 DB の rejected ステータスを「2 度と紹介しない」に意味変更。新 DB 不要。<strong>却下理由</strong>: ADR-003 で「rejected はガイドライン残し + 再候補化許可」と明示しており、破壊的変更になる。さらに「ガイドライン目的の rejected」と「恒久ブロック目的の rejected」を 1 status で表現できず、bon が混乱する。<strong>代替案 D (do-nothing + md 拡張)</strong>: 現状の md 運用のまま、bon に「PR 慣れろ」と促す。<strong>却下理由</strong>: 運用負荷の根本解決にならない。<strong>採用案 B</strong> (新 DB) は env var + 関数 1 つ追加で済み、責務分離が明確。</p>
+        </div>
+
+        <div class="da-block">
+          <h3>5.3 見落としているリスク・副作用</h3>
+          <p>(1) <strong>30 日 cooldown で <code>MAX_QUERY_PAGES=10</code> (= 1,000 件) cap 接近</strong>: 30 日 × 12 run/day × 最大 30 draft = 理論 10,800 件。実運用では通常 1,000 件未満で収まる想定だが、cap 到達 warn (<code>src/notion.ts:399</code>) は監視必須。Phase 2 で warn 検知時は <code>MAX_QUERY_PAGES = 30</code> に拡張する増分対応で十分。(2) <strong>post-history.jsonl のサイズ膨張</strong>: 既に追記のみ運用 (rotation なし) なので、30 日参照では何も変わらない。線形スキャン O(N) で N ≤ 数千件想定、性能問題なし。(3) <strong>Notion ブラックリスト DB の整合性</strong>: 同一 ASIN を bon が 2 度登録する可能性。<code>queryBlacklistAsins</code> は Set 集約なので副作用なし、ただし bon 視点で混乱するため Notion DB の ASIN property に「重複警告 view」(formula) を推奨運用として doc 化する (実装不要)。(4) <strong>「30 日経過後の再候補化」の挙動が直感に反する場合</strong>: 30 日後に同じ ASIN が再 backlog で来ると bon が「あれ、これ前に投稿したやつ」と混乱する。対策: Notion DB の posted 履歴で確認可能、UI 工夫は本 spec の scope 外。</p>
+        </div>
+
+        <div class="da-block">
+          <h3>5.4 ユーザー価値 (PM 視点)</h3>
+          <p>動く: cron で 30 日 cooldown と Notion ブラックリストが効く。使える: bon が Notion UI で恒久ブロック登録、開発者 PR レビュー無しで運用可能。使い続けられる: 追加課金ゼロ、env var 1 つ追加のみで運用負荷も増えない。<strong>本機能の真の価値は bon の Notion 編集時間削減</strong>で、ADR-001 success criteria (月 ¥30-40k) に間接寄与する (運用時間が減れば bot の継続性 = 収益継続)。検証: 1 ヶ月運用後に bon の「rejected 操作回数」減少を観察。</p>
+        </div>
+
+        <div class="da-block">
+          <h3>5.5 テスト戦略</h3>
+          <p>Unit test (vitest): (1) <code>notion.test.ts</code> に <code>queryBlacklistAsins</code> の正常系 / paging / env 未設定 / API 失敗ケース追加、(2) <code>orchestrator.test.ts</code> の <code>queryBlacklistAsinsMock</code> 追加して union が正しく実施されることを確認、(3) <code>history.test.ts</code> は cooldown 値変更の影響なし (引数で受ける設計のため)。Integration test: なし (既存方針通り Notion API は live で叩かない)。E2E sanity: <code>DRY_RUN=true</code> 相当で 1 run 実行し、log に <code>activeAsins.union</code> 件数 + <code>blacklist.size</code> が記録されることを目視確認。Manual: bon が DB に 1 件登録して次 cron で除外されるか観察 (acceptance Day 1)。</p>
+        </div>
+
+        <div class="da-block">
+          <h3>5.6 既存実装の削除候補はあるか? (zero-base review)</h3>
+          <p>削除候補なし。<code>blocklist.md</code> は git 履歴 + PR レビュー価値で維持、<code>queryDuplicateAsins</code> / <code>readRecentAsins</code> は cooldown 内 race 防御として両立必須 (PR-A3 で意図的に二重化)。本 spec はソース追加のみ、既存ロジック改変なし。<strong>refactor 候補</strong>: <code>activeAsins</code> の組み立てを「除外ソース配列の reduce」に抽象化する案はあるが、ソース数 4 で抽象化メリット薄。KISS で展開維持。</p>
+        </div>
+      </section>
+
+      <section class="card" id="s6">
+        <h2>6. Design</h2>
+
+        <h3>6.1 Phase 1: COOLDOWN_HOURS 拡張 (24 → 720)</h3>
+        <p><em>1 行変更 + test 期待値更新で完結する低リスク先行リリース。</em></p>
+        <pre class="mermaid">
+sequenceDiagram
+    autonumber
+    participant Main as c2 (main)
+    participant Config as src/config.ts
+    participant Tests as src/notion.test.ts / history.test.ts
+    participant Doc as docs/notes/notion-approval-flow.md
+
+    Main-&gt;&gt;Config: COOLDOWN_HOURS = 24 → 720
+    Main-&gt;&gt;Tests: test 内の cooldown 値ハードコードを 720 相当に更新
+    Main-&gt;&gt;Doc: 「24h 以内」記述を「30 日以内」に書き換え
+    Note over Main: ADR-003 (rejected 挙動) は変更なし
+        </pre>
+
+        <h3>6.2 Phase 2: Notion ブラックリスト DB スキーマ作成 (bon 手作業)</h3>
+        <p><em>bon が Notion 上で新規 DB を作成し、data source ID を共有する手順。</em></p>
+        <pre class="mermaid">
+sequenceDiagram
+    autonumber
+    actor Bon
+    participant Notion as Notion workspace
+    participant GHA as GitHub Actions secrets
+
+    Bon-&gt;&gt;Notion: 新規 DB「vueprix ブラックリスト」作成
+    Note over Bon,Notion: schema:<br/>- 商品名 (title)<br/>- ASIN (rich_text, required)<br/>- 理由 (rich_text)<br/>- 登録日 (date, default=作成日)
+    Bon-&gt;&gt;Notion: 既存 vueprix integration を connect
+    Bon-&gt;&gt;Bon: data source ID を取得 (URL の dsv_xxxx 部分)
+    Bon-&gt;&gt;GHA: NOTION_VUEPRIX_BLACKLIST_DATA_SOURCE_ID を secret 登録
+        </pre>
+
+        <h3>6.3 Phase 3: queryBlacklistAsins 実装</h3>
+        <p><em>queryDuplicateAsins を簡略化したペアリング関数を notion.ts に追加。</em></p>
+        <pre class="mermaid">
+sequenceDiagram
+    autonumber
+    participant Main as c2 (main)
+    participant Notion as src/notion.ts
+    participant Tests as src/notion.test.ts
+
+    Main-&gt;&gt;Notion: queryBlacklistAsins() 追加 (~30 行)
+    Note over Notion: - env var チェック (未設定→ warn + empty Set)<br/>- data_source_id = NOTION_VUEPRIX_BLACKLIST_DATA_SOURCE_ID<br/>- filter: なし (全件取得)<br/>- paging: MAX_QUERY_PAGES (既存 const 流用)<br/>- extractRichText で ASIN 取り出し
+    Main-&gt;&gt;Tests: 正常系 / paging / env 未設定 / API 失敗の 4 ケース追加
+        </pre>
+
+        <h3>6.4 Phase 4: orchestrator 統合</h3>
+        <p><em>既存 Promise.all に queryBlacklistAsins を追加して union するだけ。</em></p>
+        <pre class="mermaid">
+sequenceDiagram
+    autonumber
+    participant Main as c2 (main)
+    participant Orch as src/run/orchestrator.ts
+    participant Tests as src/run/orchestrator.test.ts
+
+    Main-&gt;&gt;Orch: Promise.all に queryBlacklistAsins(startedAt) 追加
+    Note over Orch: activeAsins = new Set([<br/>  ...notionDup,<br/>  ...historyDup,<br/>  ...notionBlacklist,  // NEW<br/>])<br/>blocklist (md) は別変数のまま (現行構造維持)
+    Main-&gt;&gt;Orch: logger.info に blacklist.size 追加
+    Main-&gt;&gt;Tests: queryBlacklistAsinsMock 追加 + union ケース
+        </pre>
+
+        <h3>6.5 Phase 5: 3-perspective review + delivery</h3>
+        <p><em>plan 内で security/code/architect レビュー + Delivery Manager 委譲。</em></p>
+        <pre class="mermaid">
+sequenceDiagram
+    autonumber
+    participant Main as c2 (main)
+    participant Sec as security-reviewer
+    participant CR as code-reviewer
+    participant Arch as architect
+    participant DM as Delivery Manager
+    participant PR as GitHub PR
+
+    par 3-perspective review
+        Main-&gt;&gt;Sec: security review
+        Main-&gt;&gt;CR: code review
+        Main-&gt;&gt;Arch: architect review
+    end
+    Sec--&gt;&gt;Main: verdict
+    CR--&gt;&gt;Main: verdict
+    Arch--&gt;&gt;Main: verdict
+    Main-&gt;&gt;DM: Delivery delegate (plan §Delivery 逐語引用)
+    DM-&gt;&gt;PR: push + gh pr create + merge
+    DM--&gt;&gt;Main: merged
+        </pre>
+
+        <h3>6.X 設計判断の補足</h3>
+        <ul>
+          <li><strong>方式選定</strong>: 候補 A (rejected 恒久化) / B (新 DB) / C (md 拡張のみ) のうち B を採用。理由は責務分離 (rejected はガイドライン用、blacklist DB は恒久ブロック用) + bon の Notion UI 導線確保。</li>
+          <li><strong>cooldown 値 = 720h (30 日)</strong>: bon 主観で「セールサイクル 1 ヶ月」想定。1 ヶ月後の運用観察で 14 日 (336h) / 60 日 (1440h) に再調整可能 (1 行変更)。</li>
+          <li><strong>blocklist.md と Notion blacklist DB の並行運用</strong>: 廃止せず併用。md は PR レビューで「なぜブロックしたか」が git に残る、DB は bon の即時運用導線。同期は不要 (取得時に union するだけ)。</li>
+          <li><strong>queryBlacklistAsins の filter</strong>: 全件取得 (Status filter なし)。ブラックリスト DB は ASIN 登録の事実 = 恒久ブロック意図、という単純な意味論。Status property は付けない (運用が複雑化するため)。</li>
+          <li><strong>env 未設定時の挙動</strong>: <code>queryDuplicateAsins</code> と同じく warn ログ + 空 Set。DRY_RUN / 初期セットアップ時に Notion ブラックリスト DB が未準備でも run は止めない。fail-safe 優先。</li>
+          <li><strong>失敗時の isolation</strong>: <code>queryBlacklistAsins</code> 内例外は orchestrator の <code>Promise.all</code> で reject → fatal catch される (既存 <code>queryDuplicateAsins</code> と同じ位置づけ)。Notion 不通は重大障害として可視化する方針 (Keepa/PA-API と異なり Notion 失敗は run 全体を止める)。</li>
+          <li><strong>category マッピング不要</strong>: ブラックリストは ASIN 単位のみ。category 情報は持たせない (検索/集計はする予定なし)。</li>
+        </ul>
+      </section>
+
+      <section class="card" id="s7">
+        <h2>7. Risks &amp; Mitigations</h2>
+
+        <div class="risk-card">
+          <div class="risk-card-header">
+            <span class="risk-badge risk-med">MED</span>
+            <span class="risk-card-title">30 日 cooldown で MAX_QUERY_PAGES=10 cap に接近</span>
+          </div>
+          <dl class="risk-card-body">
+            <dt>発生条件</dt><dd>Notion DB の backlog/doing/approved/posted 件数が 30 日分で 1,000 件を超える</dd>
+            <dt>対策</dt><dd>既存の <code>page cap reached</code> warn ログ (<code>src/notion.ts:399</code>) を運用で監視。観測されたら <code>MAX_QUERY_PAGES = 30</code> に拡張 (1 行)</dd>
+            <dt>検証</dt><dd>Phase 1 リリース後 1 週間の run-log に warn 出現確認</dd>
+            <dt>ロールバック</dt><dd>COOLDOWN_HOURS を 168 (7 日) 等に縮小して負荷を下げる</dd>
+          </dl>
+        </div>
+
+        <div class="risk-card">
+          <div class="risk-card-header">
+            <span class="risk-badge risk-med">MED</span>
+            <span class="risk-card-title">Notion ブラックリスト DB の env 未設定で機能無効化</span>
+          </div>
+          <dl class="risk-card-body">
+            <dt>発生条件</dt><dd><code>NOTION_VUEPRIX_BLACKLIST_DATA_SOURCE_ID</code> を GitHub Actions secrets に登録忘れ</dd>
+            <dt>対策</dt><dd>fail-safe で空 Set 返却 (run は止めない) + warn ログ。Phase 2 で bon が手順を完了するまでは機能が effectively no-op だが既存 blocklist.md + cooldown は機能</dd>
+            <dt>検証</dt><dd>Phase 4 リリース後の最初の run-log で <code>notion blacklist env not configured</code> warn が出ていないことを確認</dd>
+            <dt>ロールバック</dt><dd>不要 (no-op フォールバック済)</dd>
+          </dl>
+        </div>
+
+        <div class="risk-card">
+          <div class="risk-card-header">
+            <span class="risk-badge risk-low">LOW</span>
+            <span class="risk-card-title">30 日 cooldown で「セール継続中の良案件」を取り逃す</span>
+          </div>
+          <dl class="risk-card-body">
+            <dt>発生条件</dt><dd>ASIN=X が 1 ヶ月以上値下げ継続 (例: 在庫処分品)、初回投稿後 30 日間は再投稿されない</dd>
+            <dt>対策</dt><dd>bon が手動で当該 ASIN を <code>FIXED_ASINS</code> (config.ts:3) に追加すれば固定 ASIN 経路で継続投稿可能 (cooldown 適用は dedup 経由なので注意)</dd>
+            <dt>検証</dt><dd>運用 1 ヶ月後に「逃した案件」を bon の主観で評価、不満なら cooldown を 14 日に短縮</dd>
+            <dt>ロールバック</dt><dd>COOLDOWN_HOURS を 24 に戻す (1 行)</dd>
+          </dl>
+        </div>
+
+        <div class="risk-card">
+          <div class="risk-card-header">
+            <span class="risk-badge risk-low">LOW</span>
+            <span class="risk-card-title">Notion ブラックリスト DB の Notion API 失敗で run が落ちる</span>
+          </div>
+          <dl class="risk-card-body">
+            <dt>発生条件</dt><dd>Notion API 5xx / rate limit / network 障害</dd>
+            <dt>対策</dt><dd>既存 <code>queryDuplicateAsins</code> と同じく fatal として扱う方針 (Notion 失敗は重大障害として可視化)。@notionhq/client v5 の自動 retry で transient はカバー済</dd>
+            <dt>検証</dt><dd>orchestrator.test.ts に Notion 失敗時の run-log status='failure' assertion</dd>
+            <dt>ロールバック</dt><dd>Notion 障害が長引く場合は <code>NOTION_VUEPRIX_BLACKLIST_DATA_SOURCE_ID</code> を unset して queryBlacklistAsins を no-op 化</dd>
+          </dl>
+        </div>
+
+        <div class="risk-card">
+          <div class="risk-card-header">
+            <span class="risk-badge risk-low">LOW</span>
+            <span class="risk-card-title">bon がブラックリスト DB に誤って ASIN を登録</span>
+          </div>
+          <dl class="risk-card-body">
+            <dt>発生条件</dt><dd>bon の操作ミスで本来ブロックすべきでない ASIN を登録</dd>
+            <dt>対策</dt><dd>Notion DB なので削除も即時可能。次 cron (最大 2h 後) に解除反映</dd>
+            <dt>検証</dt><dd>運用ドキュメントに「ブラックリスト追加前に商品名で確認」を明記</dd>
+            <dt>ロールバック</dt><dd>Notion DB から該当ページを archive/delete</dd>
+          </dl>
+        </div>
+      </section>
+
+      <section class="card" id="s8">
+        <h2 data-num="08">8. Out of Scope</h2>
+        <ul>
+          <li><strong>md ↔ Notion ブラックリスト DB の双方向同期</strong>: 手動運用で十分、同期実装は複雑度に見合わない</li>
+          <li><strong>category / brand 単位の恒久ブロック UI</strong>: <code>CATEGORY_QUOTA</code> / <code>WATCH_BRANDS</code> で代替可能、UI 化は要望次第</li>
+          <li><strong>cooldown 日数のカテゴリ別差分化</strong>: 全 ASIN 一律 30 日。category/source 可変 cooldown は将来検討</li>
+          <li><strong>ブラックリスト追加の自動推薦 (e.g. rejected が 3 回続いた ASIN を自動ブラックリスト化)</strong>: 機械的判断は誤検知リスクあり、bon の主観判断を維持</li>
+          <li><strong>activeAsins 組み立ての抽象化 refactor</strong>: ソース数 4 で抽象化メリット薄、KISS で展開維持</li>
+          <li><strong>MAX_QUERY_PAGES の自動拡張</strong>: warn 検知時の手動対応で十分</li>
+          <li><strong>Notion ブラックリスト DB の「自動アーカイブ」 (例: 1 年経過したら自動削除)</strong>: 恒久ブロックの意味から外れる、不要</li>
+        </ul>
+      </section>
+
+      <hr>
+      <p><em>関連 Plan: Plan Mode で生成 (slug は harness 提示。Plan 冒頭に <code>&gt; 対応 Spec: docs/specs/prevent-duplicate-candidates.html</code> を明記)</em></p>
+    </main>
+  </div>
+</body>
+</html>

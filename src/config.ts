@@ -77,7 +77,10 @@ export const HISTORY_DAYS = 90;
 // quota.ts に capacity=MAX_POSTS_PER_RUN を渡すことで Pass2 overflow を解放、未消化カテゴリ枠を他カテゴリで埋める。
 export const MAX_POSTS_PER_RUN = 60;
 export const MIN_PRICE_YEN = 500;
-export const COOLDOWN_HOURS = 24;
+// 30 日 (720h)。短い cooldown では同一 ASIN が頻繁に再候補化される。
+// cooldown 拡張で queryDuplicateAsins の対象件数が増えるため、MAX_QUERY_PAGES=10 (1,000 件)
+// 接近を `page cap reached` warn ログで監視する必要あり (src/notion.ts)。
+export const COOLDOWN_HOURS = 720;
 
 export const POST_HISTORY_PATH = "data/post-history.jsonl";
 

@@ -11,6 +11,7 @@ import { readRecentAsins } from '../history.js';
 import { logger } from '../logger.js';
 import {
   createDraftPage,
+  queryBlacklistAsins,
   queryDuplicateAsins,
   type DraftCandidate,
 } from '../notion.js';
@@ -104,20 +105,24 @@ export const main = async (): Promise<void> => {
   try {
     const partnerTag = requirePartnerTag();
 
-    // 二重投稿ガード = Notion (primary) ∪ post-history.jsonl (secondary、PR-A3)。
-    //   - Notion queryDuplicateAsins: backlog/doing/approved/posted + cooldown 内 ASIN
-    //   - readRecentAsins: SNS 投稿成功直後に append される jsonl から cooldown 内 ASIN
-    // publishFixedCandidates の SNS 投稿成功 → Notion 書き込み失敗 race で Notion 側に entry が
-    // 残らなくても jsonl 側で次回 run の再投稿を防ぐ。
-    const [blocklist, notionDup, historyDup] = await Promise.all([
+    // 候補除外ソース:
+    //   - blocklist.md       : ファイルベース永久ブロック (git 履歴で理由追跡)
+    //   - queryDuplicateAsins: Notion DB backlog/doing/approved/posted + cooldown (30 日)
+    //   - readRecentAsins    : post-history.jsonl からの cooldown 内 ASIN (Notion 書込 race の補強)
+    //   - queryBlacklistAsins: Notion ブラックリスト DB の恒久ブロック ASIN (bon の UI 導線)
+    // blocklist (md) は別変数で維持し既存 filter 構造を保つ。残り 3 ソースは activeAsins に union。
+    // queryBlacklistAsins は env 未設定時に warn + 空 Set で fail-safe (run を止めない)。
+    const [blocklist, notionDup, historyDup, notionBlacklist] = await Promise.all([
       loadBlocklist(),
       queryDuplicateAsins(startedAt),
       readRecentAsins(startedAt, COOLDOWN_HOURS),
+      queryBlacklistAsins(),
     ]);
-    const activeAsins = new Set([...notionDup, ...historyDup]);
+    const activeAsins = new Set([...notionDup, ...historyDup, ...notionBlacklist]);
     logger.info('orchestrator', 'activeAsins assembled', {
       notion: notionDup.size,
       history: historyDup.size,
+      blacklist: notionBlacklist.size,
       union: activeAsins.size,
     });
 

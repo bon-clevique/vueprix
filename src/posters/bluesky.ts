@@ -1,4 +1,4 @@
-import { AtpAgent } from '@atproto/api';
+import { AtpAgent, RichText } from '@atproto/api';
 import { logger } from '../logger.js';
 import type { Poster, PostInput, PostOutput } from './types.js';
 
@@ -55,7 +55,17 @@ const send = async (input: PostInput): Promise<PostOutput> => {
   }
   const agent = await getOrLoginAgent(identifier, password);
   try {
-    const res = await agent.post({ text: input.text, createdAt: new Date().toISOString() });
+    // facets を付けないと URL がプレーンテキスト扱いになり hyperlink として描画されない。
+    // RichText.detectFacets は URL を UTF-8 byte offset で抽出して facets を組み立てる。
+    // @mention は今の投稿テンプレに含まれないが、将来追加された時に handle→DID を
+    // 解決できるよう、agent 付き版を使う (URL のみの text なら追加の network call は発生しない)。
+    const rt = new RichText({ text: input.text });
+    await rt.detectFacets(agent);
+    const res = await agent.post({
+      text: rt.text,
+      facets: rt.facets,
+      createdAt: new Date().toISOString(),
+    });
     const url = buildBlueskyUrl(res.uri);
     logger.info('poster.bluesky', 'Bluesky post sent', { asin: input.asin, uri: res.uri, url });
     return url ? { url } : {};
