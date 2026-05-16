@@ -9,15 +9,21 @@ const { loginMock, postMock, agentCtorSpy } = vi.hoisted(() => ({
   agentCtorSpy: vi.fn(),
 }));
 
-vi.mock('@atproto/api', () => ({
-  AtpAgent: class MockAtpAgent {
-    constructor(options?: unknown) {
-      agentCtorSpy(options);
-    }
-    login = loginMock;
-    post = postMock;
-  },
-}));
+// RichText は実装をそのまま使い、AtpAgent のみ mock 化する。
+// (facets 生成は本物の RichText.detectFacets に通したものを観測したいため)
+vi.mock('@atproto/api', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@atproto/api')>();
+  return {
+    ...actual,
+    AtpAgent: class MockAtpAgent {
+      constructor(options?: unknown) {
+        agentCtorSpy(options);
+      }
+      login = loginMock;
+      post = postMock;
+    },
+  };
+});
 
 const originalIdentifier = process.env.BSKY_IDENTIFIER;
 const originalPassword = process.env.BSKY_PASSWORD;
@@ -108,6 +114,34 @@ describe('blueskyPoster session reuse (B7)', () => {
     loginMock.mockResolvedValueOnce(undefined);
     await blueskyPoster.post({ asin: 'B1', text: 'y' });
     expect(loginMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('attaches link facets so URLs render as hyperlinks (not plain text)', async () => {
+    // regression: 旧実装は { text, createdAt } のみ渡しており facets が無いため、
+    // Bluesky 上で URL が clickable hyperlink にならずプレーン文字列で表示されていた。
+    const { blueskyPoster } = await import('./bluesky.js');
+    const url = 'https://www.amazon.co.jp/dp/B0001?tag=vueprix-22';
+    const prefix = 'お得な商品\n';
+    await blueskyPoster.post({ asin: 'B0001', text: `${prefix}${url}` });
+
+    expect(postMock).toHaveBeenCalledTimes(1);
+    const arg = postMock.mock.calls[0][0] as {
+      text: string;
+      facets?: Array<{
+        index: { byteStart: number; byteEnd: number };
+        features: Array<{ $type: string; uri?: string }>;
+      }>;
+    };
+    expect(arg.text).toBe(`${prefix}${url}`);
+    expect(arg.facets).toBeDefined();
+    const linkFacet = arg.facets?.find((f) =>
+      f.features.some((feat) => feat.$type === 'app.bsky.richtext.facet#link' && feat.uri === url),
+    );
+    expect(linkFacet).toBeDefined();
+    // byteStart/byteEnd は UTF-8 byte offset。日本語 prefix のバイト数を境界として URL が始まる。
+    const prefixBytes = Buffer.byteLength(prefix, 'utf-8');
+    expect(linkFacet?.index.byteStart).toBe(prefixBytes);
+    expect(linkFacet?.index.byteEnd).toBe(prefixBytes + url.length);
   });
 
   it('throws when BSKY credentials are not set (regression、login mock 未到達)', async () => {
