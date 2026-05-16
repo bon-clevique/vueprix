@@ -30,6 +30,7 @@ const candidate = (overrides: Partial<Candidate> = {}): Candidate => ({
   dropPercent: 30,
   source: 'brand',
   category: 'kitchen',
+  referenceSource: 'list-price',
   ...overrides,
 });
 

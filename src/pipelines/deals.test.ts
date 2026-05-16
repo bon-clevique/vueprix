@@ -15,6 +15,7 @@ describe('buildKeepaProduct', () => {
     dropPercent: 15,
     source: 'deals',
     category: 'food',
+    referenceSource: 'week-avg',
   };
 
   it('produces a ProductInfo with affiliate URL built from ASIN + partnerTag', () => {

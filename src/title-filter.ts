@@ -12,8 +12,30 @@ import type { NotionCategory } from './category.js';
 // - 「日本製 / 国産」は title に明示しない商品も多く、マッチ率が低い前提。
 const CATEGORY_WHITELIST: Record<NotionCategory, readonly RegExp[]> = {
   food: [/(国産|日本産|日本製)/],
-  health: [], // 後日キーワード追加予定。現状は素通し。
-  kitchen: [/(貝印|山崎実業)/, /(日本製|国産)/],
+  // health (ドラッグストア) は商品多種多様 (3.6M)。テーマ (食・健康・生活の質) と合うジャンルに絞る。
+  // 「素通し」だと類似品・誇大広告系が増えるため、信頼できるキーワードに sticky 化。
+  health: [
+    /(オーラルケア|歯ブラシ|歯磨き|デンタル|フロス|マウスウォッシュ)/,
+    /(シャンプー|リンス|トリートメント|コンディショナー|ボディソープ|ハンドソープ|石[けっ]ん)/,
+    /(オーガニック|無添加|低刺激|敏感肌|ベビー|赤ちゃん)/,
+    /(サプリ|ビタミン|プロテイン|プロバイオティクス|乳酸菌|食物繊維|オートミール|MCT|甘酒)/,
+    /(ハンドクリーム|ボディクリーム|保湿|日焼け止め|UV)/,
+    /(マスク|アルコール|除菌|消毒)/,
+    /(漢方|薬膳|温活|温熱|カイロ)/,
+    /(国産|日本製)/,
+  ],
+  kitchen: [
+    // 既存ブランド
+    /(貝印|山崎実業)/,
+    // 新規追加ブランド (BRAND_CATEGORY_MAP との一貫性、英語名で title hit)
+    /(HARIO|KINTO|OXO|象印|ZOJIRUSHI|タイガー|TIGER|Pyrex|パイレックス|無印良品|MUJI)/i,
+    // 日本の伝統工芸 / 産地
+    /(燕三条|燕[市]?|新潟|柳宗理|タイガー魔法瓶)/,
+    // 用途ジャンル (国産/日本製 と組み合わせて誇大広告系を絞る)
+    /(包丁|まな板|フライパン|鍋|ケトル|電気ケトル|魔法瓶|水筒|タンブラー|保存容器|キャニスター|ステンレスボウル|ザル)/,
+    /(コーヒー(ミル|ドリッパー|ポット|サーバー|ケトル|フィルター)?|ドリップ(ポット|ケトル|スタンド)|ティーポット)/,
+    /(日本製|国産)/,
+  ],
   stationery: [
     /(SARASA|サラサ)/i,
     /(FRIXION|フリクション)/i,
@@ -40,6 +62,10 @@ const CATEGORY_WHITELIST: Record<NotionCategory, readonly RegExp[]> = {
   ],
   audio: [
     /(ヘッドホン|イヤホン|スピーカー|DAC|アンプ|オーディオインターフェース)/,
+    // ノイズキャンセリング / ワイヤレス / Bluetooth 系。テーマ「生活の質」向け。
+    /(ノイズキャンセリング|ノイキャン|ANC|ワイヤレス|Bluetooth|完全ワイヤレス|TWS)/i,
+    // 主要ブランド (SoundCore/Anker, ソニー, AirPods, BOSE, JBL, Shure, Audio-Technica, etc.)
+    /(Sony\s?WH|Sony\s?WF|WH-1000|WF-1000|AirPods|BOSE|QuietComfort|JBL|Shure|Audio[- ]?Technica|オーディオテクニカ|SHOKZ|ショックス|FiiO|SoundPEATS|Soundcore|Anker)/i,
     /(日本製|国産)/,
   ],
   gaming: [

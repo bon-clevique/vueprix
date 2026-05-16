@@ -126,6 +126,7 @@ const buildDeal = (overrides: Partial<{
   currentPrice: 800,
   referencePrice: 1000,
   dropPercent: 20,
+  referenceSource: 'week-avg' as const,
   ...overrides,
 });
 
@@ -266,13 +267,14 @@ describe('orchestrator.main integration', () => {
     expect(calledAsins).not.toContain('B000BOTH0');
   });
 
-  it('limits food drafts to its CATEGORY_QUOTA (=5) regardless of how many deals returned', async () => {
-    // food カテゴリで 15 件返しても CATEGORY_QUOTA.food (=5) を超えない
+  it('caps total drafts at MAX_POSTS_PER_RUN (overflow 有効化、food 単独で 60 件を超えない)', async () => {
+    // food 100 件返しても MAX_POSTS_PER_RUN=60 で頭打ちになる。
+    // CATEGORY_QUOTA.food=10 (base) + Pass2 overflow が food のみで埋める → 計 60。
     getDealsMock.mockImplementation((categoryId: number) => {
       if (categoryId === 57239051) {
         return Promise.resolve(
           dealsResult(
-            Array.from({ length: 15 }, (_, i) =>
+            Array.from({ length: 100 }, (_, i) =>
               buildDeal({ asin: `B${String(i).padStart(3, '0')}` }),
             ),
           ),
@@ -284,7 +286,7 @@ describe('orchestrator.main integration', () => {
     const { main } = await import('../draft.js');
     await main();
 
-    expect(createDraftPageMock).toHaveBeenCalledTimes(5);
+    expect(createDraftPageMock).toHaveBeenCalledTimes(60);
   });
 
   it('falls back to Keepa-only when PA-API getItems throws', async () => {
@@ -412,8 +414,8 @@ describe('orchestrator.main integration', () => {
     const { main } = await import('../draft.js');
     await main();
 
-    // deals 経路: food quota=5 のみ (固定ASIN は混ざらない)
-    expect(createDraftPageMock).toHaveBeenCalledTimes(5);
+    // deals 経路: food (8 件入力 → quota=10 範囲内、全件採用)。固定ASIN は混ざらない
+    expect(createDraftPageMock).toHaveBeenCalledTimes(8);
     const draftAsins = createDraftPageMock.mock.calls.map((c) => (c[0] as { asin: string }).asin);
     expect(draftAsins).not.toContain('B0C1JGD2T6');
 
@@ -877,6 +879,134 @@ describe('orchestrator.main integration', () => {
     expect(createDraftPageMock).toHaveBeenCalledTimes(1);
     const draftArg = createDraftPageMock.mock.calls[0]?.[0] as { postText: string };
     expect(draftArg.postText).toBe('');
+  });
+
+  // PR-volume-1: deals/brand 経路でも PA-API SavingBasis があれば reference を再解決し、
+  // Amazon UI の打消し線価格に整合させる。Notion DB に書き込む値も SavingBasis 由来 に上書きされる。
+  it('re-resolves deals reference with PA-API SavingBasis when available', async () => {
+    getDealsMock.mockImplementation((categoryId: number) => {
+      if (categoryId === 57239051) {
+        return Promise.resolve(
+          dealsResult([
+            buildDeal({
+              asin: 'B0SAVING1',
+              title: '国産 値下げ商品',
+              currentPrice: 800,
+              referencePrice: 1000,  // Keepa week-avg fallback
+              dropPercent: 20,
+            }),
+          ]),
+        );
+      }
+      return Promise.resolve(dealsResult([]));
+    });
+    getItemsMock.mockResolvedValue([
+      {
+        asin: 'B0SAVING1',
+        title: '国産 値下げ商品 (PA-API)',
+        imageUrl: '',
+        currentPrice: 800,
+        affiliateUrl: 'https://www.amazon.co.jp/dp/B0SAVING1',
+        savingBasis: 1500,  // Amazon UI 打消し線 ¥1,500
+      },
+    ]);
+
+    const { main } = await import('../draft.js');
+    await main();
+
+    expect(createDraftPageMock).toHaveBeenCalledTimes(1);
+    const draftArg = createDraftPageMock.mock.calls[0]?.[0] as {
+      referencePrice: number;
+      dropPercent: number;
+      referenceSource: string;
+    };
+    // SavingBasis (1500) で再計算: (1500-800)/1500 = 46.6% → 47
+    expect(draftArg.referencePrice).toBe(1500);
+    expect(draftArg.dropPercent).toBe(47);
+    expect(draftArg.referenceSource).toBe('paapi-saving-basis');
+  });
+
+  it('drops deals candidate when SavingBasis re-resolution pushes drop below threshold', async () => {
+    // Keepa では 20% drop だが SavingBasis 観点では small (10%) → DROP_THRESHOLD_PERCENT (15) 未満 → skip。
+    // ただし SavingBasis ≤ current の場合は applySavingBasis が candidate を元のまま返すので、
+    // ここでは「SavingBasis > current でも drop が threshold 未満」になるシナリオを組む。
+    // current=900, savingBasis=1000 → drop=10% < 15% → skip。
+    getDealsMock.mockImplementation((categoryId: number) => {
+      if (categoryId === 57239051) {
+        return Promise.resolve(
+          dealsResult([
+            buildDeal({
+              asin: 'B0SMALLDR',
+              title: '国産 小さい値下げ',
+              currentPrice: 900,
+              referencePrice: 1125,  // Keepa: 20% drop
+              dropPercent: 20,
+            }),
+          ]),
+        );
+      }
+      return Promise.resolve(dealsResult([]));
+    });
+    getItemsMock.mockResolvedValue([
+      {
+        asin: 'B0SMALLDR',
+        title: '国産 小さい値下げ',
+        imageUrl: '',
+        currentPrice: 900,
+        affiliateUrl: 'https://www.amazon.co.jp/dp/B0SMALLDR',
+        savingBasis: 1000,  // 10% drop
+      },
+    ]);
+
+    const { main } = await import('../draft.js');
+    await main();
+
+    expect(createDraftPageMock).not.toHaveBeenCalled();
+  });
+
+  it('keeps Keepa reference when SavingBasis exceeds sanity cap', async () => {
+    // savingBasis=99999 / current=800 → 99% drop > MAX_REASONABLE_DROP_PERCENT (95) → reject、
+    // Keepa fallback (20%) で draft 作成される。
+    getDealsMock.mockImplementation((categoryId: number) => {
+      if (categoryId === 57239051) {
+        return Promise.resolve(
+          dealsResult([
+            buildDeal({
+              asin: 'B0EXCESS1',
+              title: '国産 異常値 SavingBasis',
+              currentPrice: 800,
+              referencePrice: 1000,
+              dropPercent: 20,
+            }),
+          ]),
+        );
+      }
+      return Promise.resolve(dealsResult([]));
+    });
+    getItemsMock.mockResolvedValue([
+      {
+        asin: 'B0EXCESS1',
+        title: '国産 異常値 SavingBasis',
+        imageUrl: '',
+        currentPrice: 800,
+        affiliateUrl: 'https://www.amazon.co.jp/dp/B0EXCESS1',
+        savingBasis: 99999,
+      },
+    ]);
+
+    const { main } = await import('../draft.js');
+    await main();
+
+    expect(createDraftPageMock).toHaveBeenCalledTimes(1);
+    const draftArg = createDraftPageMock.mock.calls[0]?.[0] as {
+      referencePrice: number;
+      dropPercent: number;
+      referenceSource: string;
+    };
+    // Keepa fallback (week-avg) のまま
+    expect(draftArg.referencePrice).toBe(1000);
+    expect(draftArg.dropPercent).toBe(20);
+    expect(draftArg.referenceSource).toBe('week-avg');
   });
 
   // PR-#47: deals/brand 経路の draft は amazonUrl=null で作成し、bon がサクラチェッカー +

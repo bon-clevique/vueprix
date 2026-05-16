@@ -15,6 +15,7 @@ const baseCandidate: Candidate = {
   dropPercent: 33,        // Keepa fallback
   source: 'fixed',
   category: 'fixed-list',
+  referenceSource: 'list-price',
 };
 
 describe('resolveFixedReference', () => {

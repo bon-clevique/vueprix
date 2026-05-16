@@ -11,6 +11,10 @@ Verified 2026-05-06 via `scripts/verify-keepa-categories.ts` against the live Ke
 | `2127209051` | パソコン・周辺機器 | 6,414,686 | `pc-desk` | root (verified 2026-05-10) |
 | `637394` | ゲーム | 489,770 | `gaming` | root (verified 2026-05-10). Smaller than expected — Keepa's data may exclude DL-only titles |
 | `3477981` | イヤホン・ヘッドホン本体 | 92,977 | `audio` | leaf-ish (verified 2026-05-10). 「家電&カメラ」(3210981, 23.7M) は範囲広すぎのため audio 用途では sub に絞った |
+| `3828871` | ホーム&キッチン | TBD | `kitchen` | root (PR-volume-1 で追加、要 verify)。Amazon.co.jp 標準 browse node。 |
+| `159241011` | 文房具・オフィス用品 | TBD | `stationery` | root (PR-volume-1 で追加、要 verify)。Amazon.co.jp 標準 browse node。 |
+
+> **TODO**: `3828871` / `159241011` は Amazon.co.jp に長期存在する root browse node だが、Keepa の category index 同期状況は時期によって変動するので、`scripts/verify-keepa-categories.ts 3828871 159241011` を deploy 前に走らせて productCount / name を確認すること。0 件返却が続く場合は ID 変更の可能性 (`docs/notes/keepa-categories.md` の "Previously misconfigured" セクションを参照)。
 
 ## Previously misconfigured (corrected on 2026-05-06)
 

@@ -21,6 +21,10 @@ export interface Deal {
   currentPrice: number;
   referencePrice: number;
   dropPercent: number;
+  // /deal endpoint は avg[priceType][dateRange] を返すのみ。本 bot は week-avg (avg[0][1])
+  // を referencePrice にしているため固定値だが、上流 (Notion 投稿文 / 判定) で
+  // checkAsin (PriceHistory) 由来 candidate と統一的に扱うため明示的に持たせる。
+  referenceSource: 'week-avg';
 }
 
 // reference price の出所。優先順位:
@@ -35,7 +39,8 @@ export type ReferenceSource =
   | 'list-price'
   | 'amazon-avg'
   | 'new-avg'
-  | 'min-90d';
+  | 'min-90d'
+  | 'week-avg';
 
 export interface PriceHistory {
   asin: string;
@@ -108,7 +113,14 @@ export const parseDeal = (d: KeepaDealsItem): Deal | null => {
     logger.debug('keepa', 'parseDeal dropped', { asin: d.asin, hasCurrent: !!current, hasAvg: !!avg, hasTitle: !!title });
     return null;
   }
-  return { asin: d.asin, title, currentPrice: current, referencePrice: avg, dropPercent };
+  return {
+    asin: d.asin,
+    title,
+    currentPrice: current,
+    referencePrice: avg,
+    dropPercent,
+    referenceSource: 'week-avg',
+  };
 };
 
 // 戻り値に tokensLeft を含める理由: draft.ts → run-log.ts で run 終了時の Keepa 残トークンを
@@ -119,40 +131,55 @@ export interface GetDealsResult {
   tokensLeft: number | null;
 }
 
+// /deal endpoint 1 ページあたり Keepa は 150 件返す。本 bot は KEEPA_DEAL_PAGES ページまで巡回。
+// 1 token / call なので tokens 消費が増えるが、Pro プラン (1,440/day) に対しては十分余裕がある。
+export const KEEPA_DEAL_PAGES = 3;
+
+// deltaRange の絶対値下げ額。下限 1,500 円は誇大広告 (¥10→¥9 等) 排除のため維持。
+// 上限は旧 ¥100,000 だと高単価商品 (家電/モニター/コーヒー器具) を取りこぼすので、実質上限なしに緩和。
+const DELTA_RANGE_MIN_YEN = 1500;
+const DELTA_RANGE_MAX_YEN = 100_000_000;
+
 export const getDeals = async (
   categoryId: number,
   sortType: number = KEEPA_DEAL_SORT_TYPE,
 ): Promise<GetDealsResult> => {
   // Keepa Browsing Deals API: POST /deal with DealRequest JSON body.
   // Reference: keepacom/api_backend Request.java#getDealsRequest
-  // (r.path = "deal", r.postData = gson.toJson(dealRequest))
   const url = `${KEEPA_BASE}/deal`;
-  const dealRequest = {
-    page: 0,
-    domainId: KEEPA_DOMAIN,
-    excludeCategories: [],
-    includeCategories: [categoryId],
-    priceTypes: [0],
-    deltaRange: [1500, 100000],
-    deltaPercentRange: [15, 100],
-    isFilterEnabled: true,
-    sortType,
-    dateRange: 0,
-  };
-  const res = await axios.post<KeepaDealsResponse>(url, dealRequest, {
-    params: { key: apiKey() },
-    timeout: 30_000,
-  });
-  logger.info('keepa', 'deals fetched', {
-    categoryId,
-    tokensLeft: res.data.tokensLeft ?? null,
-    count: res.data.deals?.dr?.length ?? 0,
-  });
-  const items = res.data.deals?.dr ?? [];
-  const deals = items
-    .map(parseDeal)
-    .filter((d): d is Deal => d !== null);
-  return { deals, tokensLeft: res.data.tokensLeft ?? null };
+  const allDeals: Deal[] = [];
+  let lastTokensLeft: number | null = null;
+  for (let page = 0; page < KEEPA_DEAL_PAGES; page += 1) {
+    const dealRequest = {
+      page,
+      domainId: KEEPA_DOMAIN,
+      excludeCategories: [],
+      includeCategories: [categoryId],
+      priceTypes: [0],
+      deltaRange: [DELTA_RANGE_MIN_YEN, DELTA_RANGE_MAX_YEN],
+      deltaPercentRange: [15, 100],
+      isFilterEnabled: true,
+      sortType,
+      dateRange: 0,
+    };
+    const res = await axios.post<KeepaDealsResponse>(url, dealRequest, {
+      params: { key: apiKey() },
+      timeout: 30_000,
+    });
+    const items = res.data.deals?.dr ?? [];
+    if (res.data.tokensLeft !== undefined) lastTokensLeft = res.data.tokensLeft;
+    logger.info('keepa', 'deals fetched', {
+      categoryId,
+      page,
+      tokensLeft: res.data.tokensLeft ?? null,
+      count: items.length,
+    });
+    const parsed = items.map(parseDeal).filter((d): d is Deal => d !== null);
+    allDeals.push(...parsed);
+    // ページが空 or 150 件未満なら最終ページに到達、loop 早期終了で token を節約。
+    if (items.length < 150) break;
+  }
+  return { deals: allDeals, tokensLeft: lastTokensLeft };
 };
 
 // reference price を選ぶ。PA-API SavingBasis (Amazon UI の打消し線価格) があれば最優先採用、
