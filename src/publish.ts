@@ -8,6 +8,7 @@ import {
   updateStatusToPosted,
   type DraftPayload,
 } from './notion.js';
+import { exceedsXWeightedLimit, xWeightedLength } from './post-length.js';
 import { anySucceeded, dispatch, posters, type PostInput } from './posters/index.js';
 
 interface PublishArgs {
@@ -89,15 +90,21 @@ export const main = async (argv: readonly string[]): Promise<void> => {
     return;
   }
 
-  // X の文字数上限 (POST_TEXT_MAX_CHARS) を超える 投稿文 が Notion に書かれた場合、X は API エラー、
+  // X の文字数上限 (POST_TEXT_MAX_CHARS = 280) を超える 投稿文 が Notion に書かれた場合、X は API エラー、
   // Bluesky は成功する (Bluesky 300 chars 上限内のため)。anySucceeded(result) が true になり
   // Status=posted に遷移し、X への投稿は永久に失われる silent data loss が発生する。両 SNS に
   // 確実に投稿する目的を守るため上限超は publish 全体を refuse する (再投稿可能なまま approved に残す)。
-  if ([...payload.postText].length > POST_TEXT_MAX_CHARS) {
-    logger.warn('publish', '投稿文 exceeds X char limit, refusing to post', {
+  //
+  // 旧実装は `[...str].length` (Unicode code point) で判定していたが、X は weighted character count
+  // (CJK / emoji = 2、URL = 23 固定) を使うため、CJK 多めや markdown link `[url](url)` で URL が
+  // 二重にカウントされる文 (実バグ row Index 366: codepoint 207 / weighted 292) を取りこぼしていた。
+  // post-length.ts の twitter-text 経由で X 公式の weighted count に揃える。
+  if (exceedsXWeightedLimit(payload.postText)) {
+    logger.warn('publish', '投稿文 exceeds X weighted char limit, refusing to post', {
       pageId: args.pageId,
       asin: payload.asin,
-      length: [...payload.postText].length,
+      weightedLength: xWeightedLength(payload.postText),
+      codepointLength: [...payload.postText].length,
       limit: POST_TEXT_MAX_CHARS,
     });
     return;
