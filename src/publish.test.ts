@@ -274,10 +274,11 @@ describe('publish entrypoint', () => {
     expect(appendHistoryMock).not.toHaveBeenCalled();
   });
 
-  it('returns early when 投稿文 exceeds 280 chars (X char limit; prevent silent X data loss)', async () => {
-    // 280 chars 超だと X は失敗 / Bluesky は 300 chars 上限内で成功する。anySucceeded=true で
-    // Status=posted に遷移し X への投稿が永久に失われる silent data loss を防ぐため refuse する。
-    const longText = 'あ'.repeat(281);
+  it('returns early when 投稿文 exceeds X weighted 280 (prevent silent X data loss)', async () => {
+    // X は weighted character count (CJK / emoji = 2、URL = 23 固定) で 280 上限。
+    // 旧 gate (`[...str].length > 280`) は code point だったため CJK 多い文を取りこぼしていた。
+    // 'あ' × 141 = weighted 282 > 280 で X reject、Bluesky は 300 上限内で成功 → silent data loss。
+    const longText = 'あ'.repeat(141);
     pagesRetrieveMock.mockResolvedValueOnce(
       buildApprovedPage({
         '投稿文': { rich_text: [{ plain_text: longText }] },
@@ -291,8 +292,9 @@ describe('publish entrypoint', () => {
     expect(appendHistoryMock).not.toHaveBeenCalled();
   });
 
-  it('accepts 投稿文 exactly at 280 chars (boundary)', async () => {
-    const exactText = 'あ'.repeat(280);
+  it('accepts 投稿文 exactly at X weighted 280 (boundary)', async () => {
+    // ASCII 'a' × 280 = weighted 280 (上限ちょうど)。
+    const exactText = 'a'.repeat(280);
     pagesRetrieveMock.mockResolvedValueOnce(
       buildApprovedPage({
         '投稿文': { rich_text: [{ plain_text: exactText }] },
@@ -305,6 +307,27 @@ describe('publish entrypoint', () => {
     await main(['node', 'publish.ts', '--page-id', '0123456789abcdef0123456789abcdef']);
     expect(xPostMock).toHaveBeenCalledTimes(1);
     expect(blueskyPostMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('refuses real-world buggy row: codepoint 207 / X weighted 292 (regression pin)', async () => {
+    // 実バグ row (Index 366 / ミツウロコ麦茶 / 2026-05-16):
+    // - codepoint 207 (旧 gate `[...str].length > 280` を通過)
+    // - X weighted 292 (URL を markdown link `[url](url)` で書いたため URL が 2 個と認識され
+    //   23 × 2 = 46 weighted を消費)
+    // → X API のみ reject、Bluesky は 300 上限内で成功 → Status=posted、bookmark 1 件、
+    //   X 投稿が永久に失われた。新 gate (post-length.ts の twitter-text 経由) が refuse することを pin。
+    const buggyText = `🥤【19%OFF】国産大麦100%のラベルレス麦茶（500ml×24本）<br>通常 ¥1,744 → ¥1,409（¥335安）<br>毎日の水分補給や職場・お出かけ用のまとめ買いにも◎ カフェインゼロで気軽にストック。<br><br>#Amazon でチェック→ [https://amzn.to/4wxeCuh](https://amzn.to/4wxeCuh)<br>#麦茶 #まとめ買い #カフェインゼロ`;
+    pagesRetrieveMock.mockResolvedValueOnce(
+      buildApprovedPage({
+        '投稿文': { rich_text: [{ plain_text: buggyText }] },
+      }),
+    );
+    const { main } = await import('./publish.js');
+    await main(['node', 'publish.ts', '--page-id', '0123456789abcdef0123456789abcdef']);
+    expect(xPostMock).not.toHaveBeenCalled();
+    expect(blueskyPostMock).not.toHaveBeenCalled();
+    expect(pagesUpdateMock).not.toHaveBeenCalled();
+    expect(appendHistoryMock).not.toHaveBeenCalled();
   });
 
   it('throws when --page-id is missing', async () => {

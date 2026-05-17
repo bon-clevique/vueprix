@@ -14,7 +14,7 @@ vueprix は Amazon 値下がり候補を **Notion DB「vueprix 投稿文」に S
 
 `doing` で長期放置されたものは自動 expire しない。週次レビューで `doing` フィルタを確認し、放置を発見したら bon が手動 archive する。
 
-重複防止 (`queryDuplicateAsins`) は 24h 以内かつ Status ∈ {backlog, doing, approved, posted} を対象。**`rejected` は意図的に除外**: 価格が変わって同 ASIN が再度値下がりすれば backlog として再候補化を許可する。
+重複防止 (`queryDuplicateAsins`) は 30 日 (720h) 以内かつ Status ∈ {backlog, doing, approved, posted} を対象。**`rejected` は意図的に除外**: 価格が変わって同 ASIN が再度値下がりすれば backlog として再候補化を許可する。永久ブロックは `data/blocklist.md` または Notion ブラックリスト DB を使う (`queryBlacklistAsins`)。
 
 ## DB スキーマ
 
@@ -193,7 +193,7 @@ CRIT-1 (page_id script injection) は PR #17 で env var 経由化により閉�
 
 1. 元 row は `posted` のまま放置 (history 保全)
 2. 新規 row を duplicate で作成: Notion DB で対象 row を選択 → 「複製」 → 新 row の Status を `pending_review` にし「投稿日時」を空に戻し「候補生成日時」を現在時刻に更新 → bon が承認 → publish 動線で再投稿
-3. 重複投稿リスクを抑えたいなら `posted.json` (asin 単位の履歴) との突合で COOLDOWN_HOURS=72 を考慮 (`queryDuplicateAsins` 経由で draft 段階の重複は自動回避される)
+3. 重複投稿リスクを抑えたいなら `posted.json` (asin 単位の履歴) との突合を考慮。現行 COOLDOWN_HOURS=720 (30 日) で `queryDuplicateAsins` 経由の draft 段階重複は自動回避される
 
 ### post-history.jsonl の扱い
 

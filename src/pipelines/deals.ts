@@ -53,6 +53,7 @@ export const collectDeals = async (): Promise<CollectDealsResult> => {
           dropPercent: calcDropPercent(d.currentPrice, d.referencePrice),
           source: 'deals',
           category,
+          referenceSource: d.referenceSource,
         });
       }
     } catch (err) {

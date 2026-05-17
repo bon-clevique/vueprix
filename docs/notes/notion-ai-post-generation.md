@@ -24,7 +24,7 @@ X / Bluesky に投稿 (Notion property の値をそのまま送信)
 publish.ts のガード 2 種類:
 
 - **空ガード**: 空のまま `approved` にすると X/Bluesky に空テキストが流れる事故を防ぐため publish が refuse する
-- **280 字超ガード**: X の上限 (280 chars) を超える本文は publish 全体を refuse する。Bluesky だけ成功して X 投稿が永久に失われる silent data loss を防ぐため
+- **X weighted 280 超ガード**: X の上限 (weighted 280) を超える本文は publish 全体を refuse する。Bluesky だけ成功して X 投稿が永久に失われる silent data loss を防ぐため。**X は code point ではなく weighted character count を使う**: ASCII = 1、CJK / emoji = 2、URL = 23 (固定)。`src/post-length.ts` の `exceedsXWeightedLimit` (twitter-text 経由) で判定する
 
 どちらも `approved` のまま残るので、文言を整え直して Notion automation を再発火させれば再投稿される (`src/publish.ts` 参照)。
 
@@ -46,8 +46,9 @@ publish.ts のガード 2 種類:
 Notion AI 「カスタム AI ブロック」または「文章を生成」を起動して以下を入力:
 
 ```
-以下の Amazon 値下がり商品について、X と Bluesky 両方に投稿する本文を 280 字以内で作ってください。
-両 SNS で同一本文を使うため、X の制約 (280 字) に合わせます。Bluesky の上限 (300 字) 内にも収まります。
+以下の Amazon 値下がり商品について、X と Bluesky 両方に投稿する本文を作ってください。
+X の weighted character count (CJK = 2、URL = 23 固定) で 280 以内に収めます。
+日本語が多いので体感では 130〜140 字程度が安全圏です。Bluesky 上限 (300) は楽に収まります。
 
 【出力フォーマット】
 【値下がり】<商品名>
@@ -60,6 +61,14 @@ Notion AI 「カスタム AI ブロック」または「文章を生成」を起
 <Amazon URL>
 
 #Amazon値下がり #生活の質
+
+【URL の書き方 — 必須】
+- Amazon URL は **そのまま 1 行に書く** (例: `https://amzn.to/xxxxxxx`)
+- markdown link 表記 `[https://...](https://...)` は **絶対に使わない**
+  - X は `[`/`]`/`(`/`)` を URL boundary と認識し 2 個の URL として扱うため、
+    URL 部分だけで 23 × 2 = 46 weighted char を消費し 280 上限を超えやすくなる
+- 改行タグ `<br>` も **書かない** (X / Bluesky では literal の `<br>` がそのまま表示される)。
+  改行は素の改行 (\n) で入れる
 
 【生活シーン1文の書き方】
 - 1文 (38字程度) で「自分の生活にどう取り入れるか」を表現
@@ -84,10 +93,12 @@ Amazon URL: <ページの「Amazon URL」プロパティの値>
 
 ### 仕上げチェック
 
-- 全体 280 文字以下か (X の上限)
+- URL が markdown link `[url](url)` ではなく **素の `https://...`** 1 行になっているか (一番起きがちな事故)
+- `<br>` が混入していないか (リテラル表示される)
 - 商品名が長すぎて切れている場合は商品名末尾を「…」で手動短縮
 - NG ワードが混入していないか
 - 価格表記が `通常 ¥X → ¥Y (Z%オフ)` 形式か
+- 体感 140 字以内に収まっていれば X weighted 280 はほぼ大丈夫 (CJK 多めで URL 1 個なら weighted ≒ code point + 80 程度)
 
 ## トーン調整のヒント
 

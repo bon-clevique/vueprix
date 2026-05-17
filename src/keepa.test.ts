@@ -58,6 +58,11 @@ describe('parseDeal', () => {
     expect(result?.dropPercent).toBe(60);
   });
 
+  it('tags referenceSource as week-avg (deals 経路で固定)', () => {
+    const result = parseDeal(sampleItem());
+    expect(result?.referenceSource).toBe('week-avg');
+  });
+
   it('returns null when current is sentinel -1', () => {
     const result = parseDeal(sampleItem({ current: [-1, -1, -1, -1] }));
     expect(result).toBeNull();

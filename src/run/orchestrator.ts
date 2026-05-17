@@ -10,6 +10,7 @@ import { readRecentAsins } from '../history.js';
 import { logger } from '../logger.js';
 import {
   createDraftPage,
+  queryBlacklistAsins,
   queryDuplicateAsins,
   type DraftCandidate,
 } from '../notion.js';
@@ -69,20 +70,24 @@ export const main = async (): Promise<void> => {
   try {
     const partnerTag = requirePartnerTag();
 
-    // 二重投稿ガード = Notion (primary) ∪ post-history.jsonl (secondary、PR-A3)。
-    //   - Notion queryDuplicateAsins: backlog/doing/approved/posted + cooldown 内 ASIN
-    //   - readRecentAsins: SNS 投稿成功直後に append される jsonl から cooldown 内 ASIN
-    // publishFixedCandidates の SNS 投稿成功 → Notion 書き込み失敗 race で Notion 側に entry が
-    // 残らなくても jsonl 側で次回 run の再投稿を防ぐ。
-    const [blocklist, notionDup, historyDup] = await Promise.all([
+    // 候補除外ソース:
+    //   - blocklist.md       : ファイルベース永久ブロック (git 履歴で理由追跡)
+    //   - queryDuplicateAsins: Notion DB backlog/doing/approved/posted + cooldown (30 日)
+    //   - readRecentAsins    : post-history.jsonl からの cooldown 内 ASIN (Notion 書込 race の補強)
+    //   - queryBlacklistAsins: Notion ブラックリスト DB の恒久ブロック ASIN (bon の UI 導線)
+    // blocklist (md) は別変数で維持し既存 filter 構造を保つ。残り 3 ソースは activeAsins に union。
+    // queryBlacklistAsins は env 未設定時に warn + 空 Set で fail-safe (run を止めない)。
+    const [blocklist, notionDup, historyDup, notionBlacklist] = await Promise.all([
       loadBlocklist(),
       queryDuplicateAsins(startedAt),
       readRecentAsins(startedAt, COOLDOWN_HOURS),
+      queryBlacklistAsins(),
     ]);
-    const activeAsins = new Set([...notionDup, ...historyDup]);
+    const activeAsins = new Set([...notionDup, ...historyDup, ...notionBlacklist]);
     logger.info('orchestrator', 'activeAsins assembled', {
       notion: notionDup.size,
       history: historyDup.size,
+      blacklist: notionBlacklist.size,
       union: activeAsins.size,
     });
 
@@ -104,10 +109,11 @@ export const main = async (): Promise<void> => {
       .filter((c) => !activeAsins.has(c.asin));
     const fixedPostedCount = await publishFixedCandidates(fixedFiltered, partnerTag, runId);
 
-    // deals 経路: blocklist + activeAsins フィルタ → selectByQuota (CATEGORY_QUOTA 枠管理)。
+    // deals 経路: blocklist + activeAsins フィルタ → selectByQuota (CATEGORY_QUOTA 枠管理 + overflow)。
+    // capacity=MAX_POSTS_PER_RUN を渡すことで Pass2 overflow を有効化、未消化 quota を他カテゴリに再分配する。
     const dealsAfterBlocklist = dealCandidates.filter((c) => !blocklist.has(c.asin));
     const dealsAfterActive = filterByActiveAsins(dealsAfterBlocklist, activeAsins);
-    const dealTargets = selectByQuota(dealsAfterActive);
+    const dealTargets = selectByQuota(dealsAfterActive, undefined, MAX_POSTS_PER_RUN);
 
     // brand 経路: 同じ blocklist + activeAsins フィルタを通すが、selectByQuota は通さない。
     // pipelines/brand.ts 内で既に BRAND_QUOTA=2/brand で絞り済み (= 最大 6 件)。
@@ -115,8 +121,7 @@ export const main = async (): Promise<void> => {
     const brandAfterBlocklist = brandCandidates.filter((c) => !blocklist.has(c.asin));
     const brandAfterActive = filterByActiveAsins(brandAfterBlocklist, activeAsins);
 
-    // 最終 targets = deals (CATEGORY_QUOTA 枠) + brand (BRAND_QUOTA 枠、独立)。
-    // MAX_POSTS_PER_RUN=30 cap で全体上限を担保 (PA-API / Notion 連打抑制)。
+    // 最終 targets = deals + brand。MAX_POSTS_PER_RUN cap で全体上限を担保 (PA-API / Notion 連打抑制)。
     // 固定ASIN の即投稿分は別カウントなので cap 対象外。
     const targets = [...dealTargets, ...brandAfterActive].slice(0, MAX_POSTS_PER_RUN);
     targetsCount = targets.length;
@@ -148,6 +153,7 @@ export const main = async (): Promise<void> => {
           dropPercent: target.dropPercent,
           category: target.category,
           generatedAt: new Date(),
+          referenceSource: target.referenceSource,
         };
         try {
           const pageId = await createDraftPage(draft);

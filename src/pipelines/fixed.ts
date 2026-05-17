@@ -37,6 +37,7 @@ export const collectFixed = async (): Promise<Candidate[]> => {
         dropPercent: history.dropPercent,
         source: 'fixed',
         category: CATEGORY_FIXED,
+        referenceSource: history.referenceSource,
       });
     } catch (err) {
       logger.error('pipelines/fixed', 'checkAsin failed', {
@@ -183,6 +184,7 @@ export const publishFixedCandidates = async (
           dropPercent,
           category: c.category,
           generatedAt: postedAt,
+          referenceSource,
         },
         postedAt,
         { x: result.x?.url, bluesky: result.bluesky?.url },

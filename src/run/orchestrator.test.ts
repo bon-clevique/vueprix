@@ -7,6 +7,7 @@ const checkAsinMock = vi.fn();
 const createDraftPageMock = vi.fn();
 const createPostedPageMock = vi.fn();
 const queryDuplicateAsinsMock = vi.fn();
+const queryBlacklistAsinsMock = vi.fn();
 const loadBlocklistMock = vi.fn();
 const appendRunLogMock = vi.fn();
 const fetchFixedListingsMock = vi.fn();
@@ -28,6 +29,7 @@ vi.mock('../notion.js', () => ({
   createDraftPage: (...args: unknown[]) => createDraftPageMock(...args),
   createPostedPage: (...args: unknown[]) => createPostedPageMock(...args),
   queryDuplicateAsins: (...args: unknown[]) => queryDuplicateAsinsMock(...args),
+  queryBlacklistAsins: (...args: unknown[]) => queryBlacklistAsinsMock(...args),
 }));
 
 vi.mock('../blocklist.js', () => ({
@@ -74,6 +76,7 @@ const resetAllMocks = () => {
   createDraftPageMock.mockReset();
   createPostedPageMock.mockReset();
   queryDuplicateAsinsMock.mockReset();
+  queryBlacklistAsinsMock.mockReset();
   loadBlocklistMock.mockReset();
   appendRunLogMock.mockReset();
   fetchFixedListingsMock.mockReset();
@@ -89,6 +92,7 @@ const resetAllMocks = () => {
   createDraftPageMock.mockResolvedValue('page-mock-id');
   createPostedPageMock.mockResolvedValue('posted-page-mock-id');
   queryDuplicateAsinsMock.mockResolvedValue(new Set<string>());
+  queryBlacklistAsinsMock.mockResolvedValue(new Set<string>());
   loadBlocklistMock.mockResolvedValue(new Set<string>());
   appendRunLogMock.mockResolvedValue(undefined);
   fetchFixedListingsMock.mockResolvedValue(new Map<string, FixedListing>());
@@ -115,6 +119,7 @@ const buildDeal = (overrides: Partial<{
   currentPrice: 800,
   referencePrice: 1000,
   dropPercent: 20,
+  referenceSource: 'week-avg' as const,
   ...overrides,
 });
 
@@ -204,13 +209,65 @@ describe('orchestrator.main integration', () => {
     expect(calledAsins).not.toContain('B0HISTORY');
   });
 
-  it('limits food drafts to its CATEGORY_QUOTA (=5) regardless of how many deals returned', async () => {
-    // food カテゴリで 15 件返しても CATEGORY_QUOTA.food (=5) を超えない
+  // Notion ブラックリスト DB に登録された ASIN は cooldown 関係なく恒久除外される。
+  // env 未設定 (queryBlacklistAsins が空 Set 返却) でも既存除外経路は維持される。
+  it('drops candidates present in Notion blacklist DB (permanent block)', async () => {
+    getDealsMock.mockImplementation((categoryId: number) => {
+      if (categoryId === 57239051) {
+        return Promise.resolve(dealsResult([
+          buildDeal({ asin: 'B0BLACKLST', title: '国産 ブラックリスト対象' }),
+          buildDeal({ asin: 'B000NEW', title: '国産 新規' }),
+        ]));
+      }
+      return Promise.resolve(dealsResult([]));
+    });
+    queryDuplicateAsinsMock.mockResolvedValue(new Set<string>());
+    readRecentAsinsMock.mockResolvedValue(new Set<string>());
+    queryBlacklistAsinsMock.mockResolvedValue(new Set(['B0BLACKLST']));
+
+    const { main } = await import('../draft.js');
+    await main();
+
+    const calledAsins = createDraftPageMock.mock.calls.map((c) => (c[0] as { asin: string }).asin);
+    expect(calledAsins).toContain('B000NEW');
+    expect(calledAsins).not.toContain('B0BLACKLST');
+  });
+
+  // blocklist.md (file) と Notion ブラックリスト DB は OR で適用される。
+  // 片方にだけ存在する ASIN も両方にある ASIN も draft されない。
+  it('unions blocklist.md and Notion blacklist DB (OR-applied)', async () => {
+    getDealsMock.mockImplementation((categoryId: number) => {
+      if (categoryId === 57239051) {
+        return Promise.resolve(dealsResult([
+          buildDeal({ asin: 'B000FILE0', title: '国産 md のみ' }),
+          buildDeal({ asin: 'B000NDB00', title: '国産 Notion DB のみ' }),
+          buildDeal({ asin: 'B000BOTH0', title: '国産 両方' }),
+          buildDeal({ asin: 'B000PASS0', title: '国産 通過' }),
+        ]));
+      }
+      return Promise.resolve(dealsResult([]));
+    });
+    loadBlocklistMock.mockResolvedValue(new Set(['B000FILE0', 'B000BOTH0']));
+    queryBlacklistAsinsMock.mockResolvedValue(new Set(['B000NDB00', 'B000BOTH0']));
+
+    const { main } = await import('../draft.js');
+    await main();
+
+    const calledAsins = createDraftPageMock.mock.calls.map((c) => (c[0] as { asin: string }).asin);
+    expect(calledAsins).toContain('B000PASS0');
+    expect(calledAsins).not.toContain('B000FILE0');
+    expect(calledAsins).not.toContain('B000NDB00');
+    expect(calledAsins).not.toContain('B000BOTH0');
+  });
+
+  it('caps total drafts at MAX_POSTS_PER_RUN (overflow 有効化、food 単独で 60 件を超えない)', async () => {
+    // food 100 件返しても MAX_POSTS_PER_RUN=60 で頭打ちになる。
+    // CATEGORY_QUOTA.food=10 (base) + Pass2 overflow が food のみで埋める → 計 60。
     getDealsMock.mockImplementation((categoryId: number) => {
       if (categoryId === 57239051) {
         return Promise.resolve(
           dealsResult(
-            Array.from({ length: 15 }, (_, i) =>
+            Array.from({ length: 100 }, (_, i) =>
               buildDeal({ asin: `B${String(i).padStart(3, '0')}` }),
             ),
           ),
@@ -222,7 +279,7 @@ describe('orchestrator.main integration', () => {
     const { main } = await import('../draft.js');
     await main();
 
-    expect(createDraftPageMock).toHaveBeenCalledTimes(5);
+    expect(createDraftPageMock).toHaveBeenCalledTimes(60);
   });
 
   it('builds draft from Keepa-only product info (PA-API 廃止後の唯一経路)', async () => {
@@ -322,8 +379,8 @@ describe('orchestrator.main integration', () => {
     const { main } = await import('../draft.js');
     await main();
 
-    // deals 経路: food quota=5 のみ (固定ASIN は混ざらない)
-    expect(createDraftPageMock).toHaveBeenCalledTimes(5);
+    // deals 経路: food (8 件入力 → quota=10 範囲内、全件採用)。固定ASIN は混ざらない
+    expect(createDraftPageMock).toHaveBeenCalledTimes(8);
     const draftAsins = createDraftPageMock.mock.calls.map((c) => (c[0] as { asin: string }).asin);
     expect(draftAsins).not.toContain('B0C1JGD2T6');
 
@@ -422,7 +479,7 @@ describe('orchestrator.main integration', () => {
     expect(createPostedPageMock).not.toHaveBeenCalled();
   });
 
-  it('skips fixed candidate when active set already contains it (24h cooldown)', async () => {
+  it('skips fixed candidate when active set already contains it (30-day cooldown)', async () => {
     queryDuplicateAsinsMock.mockResolvedValue(new Set<string>(['B0C1JGD2T6']));
     checkAsinMock.mockImplementation((asin: string) => {
       if (asin === 'B0C1JGD2T6') {
@@ -750,6 +807,27 @@ describe('orchestrator.main run-log integration', () => {
     expect(arg.status).toBe('failure');
     expect(arg.errorMessage).toBe('Request to Notion API has timed out');
     expect(arg.draftsCreated).toBe(0);
+    expect(exitSpy).toHaveBeenCalledWith(1);
+  });
+
+  it('appends run-log with status=failure when queryBlacklistAsins throws (Notion fatal policy)', async () => {
+    queryBlacklistAsinsMock.mockRejectedValueOnce(
+      new Error('Notion blacklist DB 503'),
+    );
+    const exitSpy = vi.spyOn(process, 'exit').mockImplementation(((_code?: number) => {
+      throw new Error('__exit__');
+    }) as never);
+
+    const { main } = await import('../draft.js');
+    await expect(main()).rejects.toThrow('__exit__');
+
+    expect(appendRunLogMock).toHaveBeenCalledTimes(1);
+    const arg = appendRunLogMock.mock.calls[0]?.[0] as {
+      status: string;
+      errorMessage: string | null;
+    };
+    expect(arg.status).toBe('failure');
+    expect(arg.errorMessage).toBe('Notion blacklist DB 503');
     expect(exitSpy).toHaveBeenCalledWith(1);
   });
 

@@ -9,6 +9,7 @@ import {
   type DraftPayload,
   type PostedLinks,
 } from './notion.js';
+import { exceedsXWeightedLimit, xWeightedLength } from './post-length.js';
 import { dispatch, posters, type PostInput, type PostResult } from './posters/index.js';
 
 interface PublishArgs {
@@ -90,18 +91,24 @@ export const main = async (argv: readonly string[]): Promise<void> => {
     return;
   }
 
-  // 旧実装では `anySucceeded(result)` で 1 つでも成功すれば Status=posted に遷移していたため
+  // 旧実装では `anySucceeded(result)` で 1 つでも成功すれば Status=posted に遷移していたため、
   // X 文字数上限超で X 失敗 + Bluesky 成功となり、X 側の silent data loss が発生していた。
   // 本 PR で全 required platform 成功時のみ posted に遷移するよう変更したが、X の文字数上限超は
   // 依然両 SNS の投稿状態を不整合化させる (= X 不投稿で X side が approved に残り、cron で
   // 同 ASIN を再 dispatch する流れに乗せると Bluesky が二重投稿される)。これを避けるため
   // 上限超は publish 全体を refuse し、bon が Notion で 投稿文 を短縮した上で再投稿可能なまま
   // approved に残す方針を維持する。
-  if ([...payload.postText].length > POST_TEXT_MAX_CHARS) {
-    logger.warn('publish', '投稿文 exceeds X char limit, refusing to post', {
+  //
+  // 旧実装は `[...str].length` (Unicode code point) で判定していたが、X は weighted character count
+  // (CJK / emoji = 2、URL = 23 固定) を使うため、CJK 多めや markdown link `[url](url)` で URL が
+  // 二重にカウントされる文 (実バグ row Index 366: codepoint 207 / weighted 292) を取りこぼしていた。
+  // post-length.ts の twitter-text 経由で X 公式の weighted count に揃える。
+  if (exceedsXWeightedLimit(payload.postText)) {
+    logger.warn('publish', '投稿文 exceeds X weighted char limit, refusing to post', {
       pageId: args.pageId,
       asin: payload.asin,
-      length: [...payload.postText].length,
+      weightedLength: xWeightedLength(payload.postText),
+      codepointLength: [...payload.postText].length,
       limit: POST_TEXT_MAX_CHARS,
     });
     return;

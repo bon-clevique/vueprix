@@ -1,6 +1,7 @@
 import { Client } from '@notionhq/client';
 import type { NotionCategory } from './category.js';
 import { COOLDOWN_HOURS, MAX_QUERY_PAGES } from './config.js';
+import type { ReferenceSource } from './keepa.js';
 import { logger } from './logger.js';
 import {
   extractCheckbox,
@@ -111,6 +112,10 @@ export interface DraftCandidate {
   category: NotionCategory;
   generatedAt: Date;
   guidelineRelations?: readonly string[];
+  // referencePrice の出所。Notion 上では callout block として page 末尾に append され、
+  // bon が「Amazon UI の打消し線価格に依拠したコピー」と「Keepa 由来の最安値タイ系コピー」を
+  // 切り替える判断材料になる。schema 変更なし (block append のみ) なので Notion DB 側の追加作業不要。
+  referenceSource?: ReferenceSource | 'keepa' | 'manual-reference-price';
 }
 
 // fetchPageById は Status=approved の page しか返さない (それ以外は throw する) ので、
@@ -212,6 +217,72 @@ const appendPostBookmarks = async (
   return bookmarks.length;
 };
 
+// referenceSource を bon が判断しやすい日本語ラベル付き callout block として page 末尾に append する。
+// 「Amazon UI に打消し線が表示されているか」が値下げコピー採用の判断材料。
+const REFERENCE_SOURCE_LABEL: Record<string, { label: string; emoji: string; note: string }> = {
+  'manual-reference-price': {
+    emoji: '✏️',
+    label: 'Notion 手動入力 参考定価',
+    note: '固定ASIN 用に bon が設定した希望小売価格。Amazon UI 表示は要確認。',
+  },
+  'list-price': {
+    emoji: '⚠️',
+    label: 'Keepa 90日 List Price',
+    note: 'Amazon UI に打消し線が無い可能性。「過去最安値タイ」「平均比 -X%」系コピー推奨。',
+  },
+  'amazon-avg': {
+    emoji: '⚠️',
+    label: 'Keepa 90日 Amazon 平均',
+    note: 'Amazon UI に打消し線が無い可能性。「過去最安値タイ」「平均比 -X%」系コピー推奨。',
+  },
+  'new-avg': {
+    emoji: '⚠️',
+    label: 'Keepa 90日 New 平均',
+    note: 'Amazon UI に打消し線が無い可能性。「過去最安値タイ」「平均比 -X%」系コピー推奨。',
+  },
+  'week-avg': {
+    emoji: '⚠️',
+    label: 'Keepa 週平均',
+    note: 'Amazon UI に打消し線が無い可能性。「過去最安値タイ」「平均比 -X%」系コピー推奨。',
+  },
+  'min-90d': {
+    emoji: '⚠️',
+    label: 'Keepa 90日最安値',
+    note: 'Amazon UI に打消し線が無い可能性。「過去最安値タイ」「平均比 -X%」系コピー推奨。',
+  },
+  keepa: {
+    emoji: '⚠️',
+    label: 'Keepa fallback',
+    note: 'Amazon UI に打消し線が無い可能性。「過去最安値タイ」「平均比 -X%」系コピー推奨。',
+  },
+};
+
+const appendReferenceSourceCallout = async (
+  client: Client,
+  pageId: string,
+  referenceSource: string,
+): Promise<void> => {
+  const meta = REFERENCE_SOURCE_LABEL[referenceSource] ?? {
+    emoji: 'ℹ️',
+    label: referenceSource,
+    note: '',
+  };
+  const text = `参考価格ソース: ${meta.label}${meta.note ? ` — ${meta.note}` : ''}`;
+  await client.blocks.children.append({
+    block_id: pageId,
+    children: [
+      {
+        object: 'block',
+        type: 'callout',
+        callout: {
+          icon: { type: 'emoji', emoji: meta.emoji },
+          rich_text: [{ type: 'text', text: { content: text } }],
+        },
+      },
+    ],
+  });
+};
+
 // Status=backlog として candidate を 1 page 作成。page id を返す。
 // approval workflow の起点。Notion automation が Status=approved に変更すると repository_dispatch が発火する。
 export const createDraftPage = async (draft: DraftCandidate): Promise<string> => {
@@ -229,6 +300,19 @@ export const createDraftPage = async (draft: DraftCandidate): Promise<string> =>
     },
   });
   const pageId = (res as { id: string }).id;
+  // referenceSource を callout として page 末尾に append (schema 変更不要、bon の判断材料用)。
+  // 失敗しても draft 作成自体は live なので warn ログのみで continue する。
+  if (draft.referenceSource) {
+    try {
+      await appendReferenceSourceCallout(client, pageId, draft.referenceSource);
+    } catch (err) {
+      logger.warn('notion', 'append reference source callout failed', {
+        asin: draft.asin,
+        pageId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
   logger.info('notion', 'draft page created', { asin: draft.asin, pageId, category: draft.category });
   return pageId;
 };
@@ -252,6 +336,17 @@ export const createPostedPage = async (
     },
   });
   const pageId = (res as { id: string }).id;
+  if (draft.referenceSource) {
+    try {
+      await appendReferenceSourceCallout(client, pageId, draft.referenceSource);
+    } catch (err) {
+      logger.warn('notion', 'append reference source callout failed', {
+        asin: draft.asin,
+        pageId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
   const bookmarkCount = await appendPostBookmarks(client, pageId, links);
   logger.info('notion', 'posted page created', {
     asin: draft.asin,
@@ -474,6 +569,51 @@ export const queryDuplicateAsins = async (now: Date): Promise<Set<string>> => {
     });
   }
   logger.info('notion', 'duplicate asins queried', { count: asins.size });
+  return asins;
+};
+
+// Notion ブラックリスト DB から「2 度と紹介しない」ASIN を全件取得する。
+// queryDuplicateAsins と異なり Status / 日付 filter なし (登録の事実 = 恒久ブロック意図)。
+// 失敗時の挙動 (`blocklist.md` が file 失敗を warn + 空 Set で吸収するのと意図的に非対称):
+//   - env 未設定: warn + 空 Set。DRY_RUN / 初回 secret 登録忘れで run を止めない fail-safe
+//   - Notion API 失敗: throw され orchestrator の Promise.all で fatal catch。
+//     Notion DB は除外ソースの SoT で、API 不通時に空 Set を返すと「ブロック解除された」と
+//     誤って解釈されるリスクが高いため、run を止めて再実行で正確性を担保する
+//     (queryDuplicateAsins と統一)。
+export const queryBlacklistAsins = async (): Promise<Set<string>> => {
+  const dataSourceId = process.env.NOTION_VUEPRIX_BLACKLIST_DATA_SOURCE_ID;
+  if (!process.env.NOTION_API_KEY || !dataSourceId) {
+    logger.warn('notion', 'blacklist env not configured, returning empty set');
+    return new Set();
+  }
+  const client = buildClient();
+  const asins = new Set<string>();
+  let cursor: string | undefined;
+  let reachedCap = true;
+  for (let i = 0; i < MAX_QUERY_PAGES; i += 1) {
+    const res = (await client.dataSources.query({
+      data_source_id: dataSourceId,
+      page_size: 100,
+      ...(cursor ? { start_cursor: cursor } : {}),
+    })) as unknown as NotionQueryResult;
+    for (const page of res.results) {
+      const asin = extractRichText(page.properties.ASIN);
+      if (asin) asins.add(asin);
+    }
+    if (!res.has_more || !res.next_cursor) {
+      reachedCap = false;
+      break;
+    }
+    cursor = res.next_cursor;
+  }
+  if (reachedCap) {
+    logger.warn('notion', 'page cap reached', {
+      fn: 'queryBlacklistAsins',
+      maxPages: MAX_QUERY_PAGES,
+      collected: asins.size,
+    });
+  }
+  logger.info('notion', 'blacklist asins queried', { count: asins.size });
   return asins;
 };
 
