@@ -3,10 +3,9 @@ import { requirePartnerTag } from '../affiliate.js';
 import { loadBlocklist } from '../blocklist.js';
 import {
   COOLDOWN_HOURS,
-  DROP_THRESHOLD_PERCENT,
   MAX_POSTS_PER_RUN,
 } from '../config.js';
-import { calcDropPercent, filterByActiveAsins } from '../filter.js';
+import { filterByActiveAsins } from '../filter.js';
 import { readRecentAsins } from '../history.js';
 import { logger } from '../logger.js';
 import {
@@ -15,12 +14,10 @@ import {
   queryDuplicateAsins,
   type DraftCandidate,
 } from '../notion.js';
-import { getItems, type ProductInfo } from '../paapi.js';
 import { buildKeepaProduct, collectDeals } from '../pipelines/deals.js';
-import { collectFixed, MAX_REASONABLE_DROP_PERCENT, publishFixedCandidates } from '../pipelines/fixed.js';
+import { collectFixed, publishFixedCandidates } from '../pipelines/fixed.js';
 import { collectBrandHits } from '../pipelines/brand.js';
 import { appendRunLog, type RunStatus } from '../run-log.js';
-import type { Candidate } from '../types.js';
 import { selectByQuota } from './quota.js';
 
 // @notionhq/client v5 の retry log は library 内部の console.warn で出る (実例:
@@ -39,38 +36,6 @@ if (!process.env.VITEST) {
     origWarn(...args);
   };
 }
-
-// PA-API SavingBasis (Amazon UI 打消し線価格) があれば Keepa 由来 reference を上書きする。
-// fixed 経路の resolveFixedReference と異なり manual reference は持たないため、選択肢は
-// savingBasis vs Keepa fallback の 2 系統。誇大広告防止のため MAX_REASONABLE_DROP_PERCENT で cap。
-//
-// 戻り値: 新 candidate (referencePrice / dropPercent / referenceSource を更新)。
-// savingBasis 未取得 or cap 超過 / current 以下 のいずれかなら元の Keepa 由来値を保持して返す。
-export const applySavingBasis = (
-  candidate: Candidate,
-  savingBasis: number | undefined,
-): Candidate => {
-  if (typeof savingBasis !== 'number' || savingBasis <= candidate.currentPrice) {
-    return candidate;
-  }
-  const dropPercent = Math.max(0, calcDropPercent(candidate.currentPrice, savingBasis));
-  if (dropPercent > MAX_REASONABLE_DROP_PERCENT) {
-    logger.warn('orchestrator', 'SavingBasis drop exceeds sanity cap, keeping Keepa reference', {
-      asin: candidate.asin,
-      savingBasis,
-      currentPrice: candidate.currentPrice,
-      dropPercent,
-      cap: MAX_REASONABLE_DROP_PERCENT,
-    });
-    return candidate;
-  }
-  return {
-    ...candidate,
-    referencePrice: savingBasis,
-    dropPercent,
-    referenceSource: 'paapi-saving-basis',
-  };
-};
 
 // run の終了形態。partial = 一部 createDraftPage が失敗 (targets > 0 かつ drafted < targets)。
 // 完全成功 / 失敗ゼロは success、catch (err) に到達したら failure。
@@ -172,44 +137,10 @@ export const main = async (): Promise<void> => {
     if (targets.length === 0) {
       logger.info('orchestrator', 'no targets, run finished');
     } else {
-      // PA-API がある場合は最優先、なければ Keepa 由来 ProductInfo で続行
-      let paapiProducts: ProductInfo[] = [];
-      try {
-        paapiProducts = await getItems(targets.map((t) => t.asin));
-      } catch (err) {
-        logger.warn('orchestrator', 'PA-API getItems failed, falling back to Keepa-only', {
-          error: err instanceof Error ? err.message : String(err),
-        });
-      }
-
-      const paapiByAsin = new Map(paapiProducts.map((p) => [p.asin, p]));
-
-      // PA-API SavingBasis を取れた候補は reference を再解決 (Amazon UI と一貫させる)。
-      // SavingBasis 起因で dropPercent が DROP_THRESHOLD_PERCENT を割り込んだら投稿せずに skip。
-      // (Keepa では下げに見えていたが PA-API 観点では下げ幅が小さい商品の混入を防ぐ)
-      const refinedTargets: Candidate[] = [];
       for (const target of targets) {
-        const refined = applySavingBasis(target, paapiByAsin.get(target.asin)?.savingBasis);
-        if (refined.dropPercent < DROP_THRESHOLD_PERCENT) {
-          logger.info('orchestrator', 'candidate dropped after SavingBasis re-resolution', {
-            asin: refined.asin,
-            originalDropPercent: target.dropPercent,
-            refinedDropPercent: refined.dropPercent,
-            referenceSource: refined.referenceSource,
-          });
-          continue;
-        }
-        refinedTargets.push(refined);
-      }
-
-      logger.info('orchestrator', 'targets refined with SavingBasis', {
-        before: targets.length,
-        after: refinedTargets.length,
-        kept: refinedTargets.length,
-      });
-
-      for (const target of refinedTargets) {
-        const product = paapiByAsin.get(target.asin) ?? buildKeepaProduct(target, partnerTag);
+        // Keepa-only 経路: PA-API 廃止により Keepa 由来 product info を直接組み立てる。
+        // partnerTag は publishFixedCandidates が個別に使うため、buildKeepaProduct には不要。
+        const product = buildKeepaProduct(target);
         // postText は Notion AI で生成する運用に移行したため、ドラフト作成時は空文字列で初期化する。
         // Amazon URL は null で初期化 (PR-#47)。bon が サクラチェッカー + Amazon 確認後に手動入力。
         const draft: DraftCandidate = {

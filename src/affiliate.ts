@@ -8,9 +8,9 @@ export const buildAffiliateUrl = (asin: string, partnerTag: string): string => {
 };
 
 export const requirePartnerTag = (): string => {
-  const tag = process.env.PAAPI_PARTNER_TAG;
+  const tag = process.env.AMAZON_PARTNER_TAG;
   if (!tag) {
-    throw new Error('PAAPI_PARTNER_TAG is required (Amazon Associate ID)');
+    throw new Error('AMAZON_PARTNER_TAG is required (Amazon Associate ID)');
   }
   return tag;
 };

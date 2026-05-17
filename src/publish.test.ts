@@ -93,16 +93,20 @@ describe('publish entrypoint', () => {
     expect(pagesUpdateMock).not.toHaveBeenCalled();
   });
 
-  it('marks Status=posted when at least one poster succeeds', async () => {
+  // PR-1 Phase 2: 旧「片方成功で Status=posted」挙動を撤廃。新挙動は per-platform 制御で
+  // 「両成功時のみ Status=posted、片方失敗時は approved のまま + 成功 checkbox のみ true」。
+  it('marks Status=posted only when both posters succeed', async () => {
     pagesRetrieveMock.mockResolvedValueOnce(buildApprovedPage());
     pagesUpdateMock.mockResolvedValueOnce({});
     xPostMock.mockResolvedValueOnce(undefined);
-    blueskyPostMock.mockRejectedValueOnce(new Error('bsky down'));
+    blueskyPostMock.mockResolvedValueOnce(undefined);
     const { main } = await import('./publish.js');
     await main(['node', 'publish.ts', '--page-id', '0123456789abcdef0123456789abcdef']);
     expect(pagesUpdateMock).toHaveBeenCalledTimes(1);
     const arg = pagesUpdateMock.mock.calls[0]?.[0] as { properties: Record<string, unknown> };
     expect(arg.properties.Status).toEqual({ status: { name: 'posted' } });
+    expect(arg.properties.x_posted).toEqual({ checkbox: true });
+    expect(arg.properties.bluesky_posted).toEqual({ checkbox: true });
   });
 
   it('appends X / Bluesky bookmark blocks to the Notion page after posting', async () => {
@@ -125,7 +129,9 @@ describe('publish entrypoint', () => {
     ]);
   });
 
-  it('appends only the X bookmark when Bluesky fails', async () => {
+  // PR-1 Phase 2: X 成功 + BSky 失敗時、Status は approved のまま (旧: posted 遷移)、
+  // x_posted のみ true、bookmark は X 1 件のみ。次回 publish で BSky retry できる。
+  it('keeps Status=approved + sets only x_posted=true + appends only X bookmark when Bluesky fails', async () => {
     pagesRetrieveMock.mockResolvedValueOnce(buildApprovedPage());
     pagesUpdateMock.mockResolvedValueOnce({});
     blocksAppendMock.mockResolvedValueOnce({});
@@ -133,9 +139,97 @@ describe('publish entrypoint', () => {
     blueskyPostMock.mockRejectedValueOnce(new Error('bsky down'));
     const { main } = await import('./publish.js');
     await main(['node', 'publish.ts', '--page-id', '0123456789abcdef0123456789abcdef']);
+    expect(pagesUpdateMock).toHaveBeenCalledTimes(1);
+    const arg = pagesUpdateMock.mock.calls[0]?.[0] as { properties: Record<string, unknown> };
+    expect(arg.properties.Status).toBeUndefined();
+    expect(arg.properties['投稿日時']).toBeUndefined();
+    expect(arg.properties.x_posted).toEqual({ checkbox: true });
+    expect(arg.properties.bluesky_posted).toBeUndefined();
+    // bookmark は X 1 件のみ
     expect(blocksAppendMock).toHaveBeenCalledTimes(1);
-    const arg = blocksAppendMock.mock.calls[0]?.[0] as { children: unknown[] };
-    expect(arg.children).toHaveLength(1);
+    const blocksArg = blocksAppendMock.mock.calls[0]?.[0] as { children: unknown[] };
+    expect(blocksArg.children).toHaveLength(1);
+  });
+
+  // PR-1 Phase 2: 新規 3 ケース pin
+  // (a) xPosted=true で X poster 未起動 + Bluesky のみ dispatch (両成功で Status=posted)
+  it('skips X poster when xPosted=true (re-run with X already posted, retry only Bluesky)', async () => {
+    pagesRetrieveMock.mockResolvedValueOnce(
+      buildApprovedPage({ x_posted: { checkbox: true } }),
+    );
+    pagesUpdateMock.mockResolvedValueOnce({});
+    blueskyPostMock.mockResolvedValueOnce({ url: 'https://bsky.app/profile/vueprix.bsky.social/post/222' });
+    const { main } = await import('./publish.js');
+    await main(['node', 'publish.ts', '--page-id', '0123456789abcdef0123456789abcdef']);
+    // X poster は起動しない
+    expect(xPostMock).not.toHaveBeenCalled();
+    // Bluesky のみ dispatch
+    expect(blueskyPostMock).toHaveBeenCalledTimes(1);
+    // filteredPosters = [bluesky] のみ → allRequiredSucceeded=true → Status=posted
+    expect(pagesUpdateMock).toHaveBeenCalledTimes(1);
+    const arg = pagesUpdateMock.mock.calls[0]?.[0] as { properties: Record<string, unknown> };
+    expect(arg.properties.Status).toEqual({ status: { name: 'posted' } });
+    expect(arg.properties.bluesky_posted).toEqual({ checkbox: true });
+    // x_posted は触らない (dispatch 対象外、result.x が undefined)
+    expect(arg.properties.x_posted).toBeUndefined();
+  });
+
+  // (b) 両 xPosted=blueskyPosted=false 起点 + 両成功 → Status=posted + 両 checkbox=true
+  it('marks Status=posted when both posters succeed from fresh state', async () => {
+    pagesRetrieveMock.mockResolvedValueOnce(buildApprovedPage());
+    pagesUpdateMock.mockResolvedValueOnce({});
+    xPostMock.mockResolvedValueOnce({ url: 'https://twitter.com/i/web/status/111' });
+    blueskyPostMock.mockResolvedValueOnce({ url: 'https://bsky.app/profile/vueprix.bsky.social/post/222' });
+    const { main } = await import('./publish.js');
+    await main(['node', 'publish.ts', '--page-id', '0123456789abcdef0123456789abcdef']);
+    expect(xPostMock).toHaveBeenCalledTimes(1);
+    expect(blueskyPostMock).toHaveBeenCalledTimes(1);
+    expect(pagesUpdateMock).toHaveBeenCalledTimes(1);
+    const arg = pagesUpdateMock.mock.calls[0]?.[0] as { properties: Record<string, unknown> };
+    expect(arg.properties.Status).toEqual({ status: { name: 'posted' } });
+    expect(arg.properties.x_posted).toEqual({ checkbox: true });
+    expect(arg.properties.bluesky_posted).toEqual({ checkbox: true });
+  });
+
+  // (c) 両 false 起点 + X 失敗 BSky 成功 → Status=approved 維持 + bluesky_posted=true + BSky bookmark のみ
+  it('keeps Status=approved when X fails but BSky succeeds (per-platform retry)', async () => {
+    pagesRetrieveMock.mockResolvedValueOnce(buildApprovedPage());
+    pagesUpdateMock.mockResolvedValueOnce({});
+    blocksAppendMock.mockResolvedValueOnce({});
+    xPostMock.mockRejectedValueOnce(new Error('x down'));
+    blueskyPostMock.mockResolvedValueOnce({ url: 'https://bsky.app/profile/vueprix.bsky.social/post/222' });
+    const { main } = await import('./publish.js');
+    await main(['node', 'publish.ts', '--page-id', '0123456789abcdef0123456789abcdef']);
+    expect(pagesUpdateMock).toHaveBeenCalledTimes(1);
+    const arg = pagesUpdateMock.mock.calls[0]?.[0] as { properties: Record<string, unknown> };
+    expect(arg.properties.Status).toBeUndefined();
+    expect(arg.properties['投稿日時']).toBeUndefined();
+    expect(arg.properties.x_posted).toBeUndefined();
+    expect(arg.properties.bluesky_posted).toEqual({ checkbox: true });
+    // BSky bookmark のみ
+    expect(blocksAppendMock).toHaveBeenCalledTimes(1);
+    const blocksArg = blocksAppendMock.mock.calls[0]?.[0] as {
+      children: Array<{ type: string; bookmark: { url: string } }>;
+    };
+    expect(blocksArg.children).toEqual([
+      { object: 'block', type: 'bookmark', bookmark: { url: 'https://bsky.app/profile/vueprix.bsky.social/post/222' } },
+    ]);
+  });
+
+  // PR-1 Phase 2: 両 xPosted=blueskyPosted=true (異常運用) → 何も dispatch せず early return
+  it('does nothing when both platforms are already posted (filteredPosters empty)', async () => {
+    pagesRetrieveMock.mockResolvedValueOnce(
+      buildApprovedPage({
+        x_posted: { checkbox: true },
+        bluesky_posted: { checkbox: true },
+      }),
+    );
+    const { main } = await import('./publish.js');
+    await main(['node', 'publish.ts', '--page-id', '0123456789abcdef0123456789abcdef']);
+    expect(xPostMock).not.toHaveBeenCalled();
+    expect(blueskyPostMock).not.toHaveBeenCalled();
+    expect(pagesUpdateMock).not.toHaveBeenCalled();
+    expect(appendHistoryMock).not.toHaveBeenCalled();
   });
 
   it('returns early without throwing when page is not approved', async () => {

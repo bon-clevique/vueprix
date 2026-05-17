@@ -27,15 +27,15 @@ export interface Deal {
   referenceSource: 'week-avg';
 }
 
-// reference price の出所。優先順位:
-//   1. paapi-saving-basis = PA-API GetItems の Offers.Listings[0].SavingBasis.Amount
-//      (Amazon UI の打消し線価格そのもの、UI 表記と完全一致)
-//   2-5. Keepa stats fallback: avg[4]=List Price → avg[0]=Amazon → avg[1]=New → min[0][1]=90日最安値
+// reference price の出所。Keepa-only chain:
+//   1. list-price = avg[4] (Keepa List Price = 定価)
+//   2. amazon-avg = avg[0] (Amazon new price 90 日平均)
+//   3. new-avg   = avg[1] (3rd party New 90 日平均)
+//   4. min-90d   = min[0][1] (90日最安値 timestamp/price pair の price)
+// 上位候補から順に評価し、`> current` (= 値下げになっている) の最初の候補を採用する。
 // `stats.avg` (90日平均) は flat array で priceType index ごとに 1 値:
 //   0 = Amazon, 1 = New (3rd party), 4 = List Price (定価), ...
-// SavingBasis は Amazon が打消し線を表示する商品でのみ返る (Keepa の List Price とは independent)。
 export type ReferenceSource =
-  | 'paapi-saving-basis'
   | 'list-price'
   | 'amazon-avg'
   | 'new-avg'
@@ -182,22 +182,14 @@ export const getDeals = async (
   return { deals: allDeals, tokensLeft: lastTokensLeft };
 };
 
-// reference price を選ぶ。PA-API SavingBasis (Amazon UI の打消し線価格) があれば最優先採用、
-// なければ Keepa stats fallback chain: List Price (avg[4]) → Amazon (avg[0]) → New (avg[1]) → 90日最安値。
+// reference price を Keepa stats から選ぶ。
+// chain: List Price (avg[4]) → Amazon (avg[0]) → New (avg[1]) → 90日最安値 (min[0][1])。
 // 「下げ」になっていない候補 (price <= current) は skip して次へ。
-//
 // 戻り値 null = どの候補も current より高くない (= 値下げと言えない) ことを意味する。
-//
-// savingBasis: PA-API GetItems で取得した Amazon UI 表示の定価。yen 整数。
-//   undefined / 0 / current 以下 のいずれでも Keepa fallback に落ちる。
 export const pickReferencePrice = (
   stats: NonNullable<NonNullable<KeepaProductResponse['products']>[number]['stats']>,
   current: number,
-  savingBasis?: number,
 ): { price: number; source: ReferenceSource } | null => {
-  if (typeof savingBasis === 'number' && savingBasis > current) {
-    return { price: savingBasis, source: 'paapi-saving-basis' };
-  }
   const candidates: Array<{ source: ReferenceSource; raw: number | undefined }> = [
     { source: 'list-price', raw: stats.avg?.[4] },
     { source: 'amazon-avg', raw: stats.avg?.[0] },

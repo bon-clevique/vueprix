@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  extractCheckbox,
   extractDate,
   extractNumber,
   extractRichText,
@@ -128,5 +129,24 @@ describe('extractDate', () => {
     expect(extractDate({ date: { start: null } })).toBeNull();
     expect(extractDate({ date: null })).toBeNull();
     expect(extractDate({})).toBeNull();
+  });
+});
+
+// PR-1 Phase 2: per-platform 既投稿チェックの基礎。publish 側で payload.xPosted /
+// blueskyPosted を見て 2 回目 dispatch を skip するため、null/missing は false 扱いに丸める。
+describe('extractCheckbox', () => {
+  it('returns true when checkbox is true', () => {
+    expect(extractCheckbox({ checkbox: true })).toBe(true);
+  });
+  it('returns false when checkbox is false', () => {
+    expect(extractCheckbox({ checkbox: false })).toBe(false);
+  });
+  it('returns false when checkbox field is absent on the property object', () => {
+    expect(extractCheckbox({})).toBe(false);
+  });
+  it('returns false when the property object itself is null/undefined/non-object', () => {
+    expect(extractCheckbox(null)).toBe(false);
+    expect(extractCheckbox(undefined)).toBe(false);
+    expect(extractCheckbox('string')).toBe(false);
   });
 });

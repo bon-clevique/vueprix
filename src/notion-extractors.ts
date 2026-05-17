@@ -93,3 +93,12 @@ export const extractDate = (prop: unknown): string | null => {
   const date = (prop as { date?: { start?: string | null } | null }).date;
   return date?.start || null;
 };
+
+// checkbox property を boolean で返す。
+// property 不在 / null / object でない / checkbox field 不在 は全て false (null-safe default)。
+// publish 側で「片方既投稿なら 2 回目 dispatch を skip」する per-platform 制御に使う。
+export const extractCheckbox = (prop: unknown): boolean => {
+  if (!prop || typeof prop !== 'object') return false;
+  const checkbox = (prop as { checkbox?: boolean }).checkbox;
+  return checkbox === true;
+};

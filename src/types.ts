@@ -11,8 +11,7 @@ export interface Candidate {
   dropPercent: number;
   source: 'deals' | 'fixed' | 'brand';
   category: NotionCategory;
-  // referencePrice の出所。Amazon UI の打消し線価格 (paapi-saving-basis) かどうかが
-  // post text の表現を切り替える判断材料になる (UI と一貫 ↔ Keepa 由来で UI 表示なしの可能性)。
-  // orchestrator が PA-API SavingBasis 取得後に上書きするケースを想定して mutable に保つ。
+  // referencePrice の出所。post text の表現を切り替える判断材料になる
+  // (Keepa list-price / amazon-avg / new-avg / min-90d / week-avg の 5 系統)。
   referenceSource: ReferenceSource;
 }

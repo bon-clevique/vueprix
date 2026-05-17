@@ -81,5 +81,6 @@ npm run draft
 
 - [ADR-001: Project Foundation](docs/adr/001-project-foundation.md) — 初期 tech stack と scope
 - [ADR-002: Notion Approval Flow](docs/adr/002-notion-approval-flow.md) — 2-stage pipeline / ガジェットカテゴリ / posted.json 廃止
+- [ADR-005: PA-API 廃止 + Notion platform 別 status 連携](docs/adr/005-paapi-removal-and-platform-status.md) — Keepa 単一 source 化 / per-platform checkbox / silent loss 解消
 - [docs/notes/notion-approval-flow.md](docs/notes/notion-approval-flow.md) — Notion automation + GitHub PAT 設定手順
 - [docs/notes/keepa-categories.md](docs/notes/keepa-categories.md) — Keepa category ID 検証ログ

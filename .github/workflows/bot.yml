@@ -2,7 +2,7 @@ name: vueprix-draft
 
 # Required GitHub Actions secrets:
 #   KEEPA_API_KEY
-#   PAAPI_ACCESS_KEY, PAAPI_SECRET_KEY, PAAPI_PARTNER_TAG
+#   AMAZON_PARTNER_TAG (Amazon Associate ID)
 #   NOTION_API_KEY, NOTION_VUEPRIX_DATA_SOURCE_ID, NOTION_FIXED_ASIN_DATA_SOURCE_ID, NOTION_VUEPRIX_BLACKLIST_DATA_SOURCE_ID
 #   X_API_KEY, X_API_SECRET, X_ACCESS_TOKEN, X_ACCESS_TOKEN_SECRET (固定ASIN 即投稿)
 #   BSKY_IDENTIFIER, BSKY_PASSWORD (固定ASIN 即投稿)
@@ -41,11 +41,7 @@ jobs:
       - name: Run draft pipeline
         env:
           KEEPA_API_KEY: ${{ secrets.KEEPA_API_KEY }}
-          PAAPI_ACCESS_KEY: ${{ secrets.PAAPI_ACCESS_KEY }}
-          PAAPI_SECRET_KEY: ${{ secrets.PAAPI_SECRET_KEY }}
-          PAAPI_PARTNER_TAG: ${{ secrets.PAAPI_PARTNER_TAG }}
-          PAAPI_HOST: webservices.amazon.co.jp
-          PAAPI_REGION: us-west-2
+          AMAZON_PARTNER_TAG: ${{ secrets.AMAZON_PARTNER_TAG }}
           NOTION_API_KEY: ${{ secrets.NOTION_API_KEY }}
           NOTION_VUEPRIX_DATA_SOURCE_ID: ${{ secrets.NOTION_VUEPRIX_DATA_SOURCE_ID }}
           NOTION_VUEPRIX_RUN_LOG_DATA_SOURCE_ID: ${{ secrets.NOTION_VUEPRIX_RUN_LOG_DATA_SOURCE_ID }}

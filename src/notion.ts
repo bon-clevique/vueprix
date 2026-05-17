@@ -4,6 +4,7 @@ import { COOLDOWN_HOURS, MAX_QUERY_PAGES } from './config.js';
 import type { ReferenceSource } from './keepa.js';
 import { logger } from './logger.js';
 import {
+  extractCheckbox,
   extractDate,
   extractNumber,
   extractRichText,
@@ -12,6 +13,7 @@ import {
   extractTitleText,
   extractUrl,
 } from './notion-extractors.js';
+import type { PostResult } from './posters/index.js';
 
 export interface PostedLinks {
   x?: string;
@@ -133,6 +135,11 @@ export interface DraftPayload {
   dropPercent: number;
   category: NotionCategory;
   postedAt: string | null;
+  // PR-1 Phase 2: per-platform 既投稿フラグ。Notion DB の checkbox property `x_posted` / `bluesky_posted`
+  // を読み、片方既投稿なら publish.ts 側で対応する poster を dispatch から除外する (silent loss 解消)。
+  // null/missing は false 扱い (extractCheckbox の null-safe default)。
+  xPosted: boolean;
+  blueskyPosted: boolean;
 }
 
 // Notion API: timeout/retry option を明示的に設定する。
@@ -213,11 +220,6 @@ const appendPostBookmarks = async (
 // referenceSource を bon が判断しやすい日本語ラベル付き callout block として page 末尾に append する。
 // 「Amazon UI に打消し線が表示されているか」が値下げコピー採用の判断材料。
 const REFERENCE_SOURCE_LABEL: Record<string, { label: string; emoji: string; note: string }> = {
-  'paapi-saving-basis': {
-    emoji: '✅',
-    label: 'PA-API SavingBasis',
-    note: 'Amazon UI の打消し線価格と一致。値下げコピー OK。',
-  },
   'manual-reference-price': {
     emoji: '✏️',
     label: 'Notion 手動入力 参考定価',
@@ -355,28 +357,88 @@ export const createPostedPage = async (
   return pageId;
 };
 
-// links は X / Bluesky の投稿 URL。set されている poster のみ bookmark ブロックとして
-// page 末尾に append する (replace ではない — 再投稿による重複は二重投稿ガードで
-// 起きない前提なので、冪等性は持たせない)。
-// Notion API の制約: page 直下に children を追加する場合は blocks.children.append を使う。
-// pages.update で children を渡しても無視される。
+// per-platform 制御で Notion page を更新する。
+//
+// 挙動:
+//   - result.x?.ok === true   → properties に `x_posted: { checkbox: true }` を追加
+//   - result.bluesky?.ok === true → properties に `bluesky_posted: { checkbox: true }` を追加
+//   - **両 platform が投稿済とみなせる時のみ** Status=posted + 投稿日時 をセットする。
+//     ここでの「投稿済」は (a) 今回 dispatch で ok=true、または (b) prior.xPosted/blueskyPosted=true
+//     (前回 run で投稿済) のいずれか。これにより per-platform retry シナリオ
+//     (例: 前回 X だけ成功 → 今回 BSky retry 成功) でも両 SNS 完遂時に Status=posted に進む。
+//   - 片方失敗時は Status/投稿日時 を touch せず approved のまま残し、次回 publish 再実行で
+//     残り platform を retry できる構造にする。
+//   - 何も update しない (両 false) ケースでは pages.update を呼ばず early return する。
+//   - bookmark append は今回成功 platform 分のみ行う (result.x?.ok && links.x なら X bookmark、
+//     result.bluesky?.ok && links.bluesky なら BSky bookmark)。prior の bookmark は前回 append 済。
+//
+// links は X / Bluesky の投稿 URL。Notion API の制約: page 直下に children を追加する場合は
+// blocks.children.append を使う。pages.update で children を渡しても無視される。
+export interface PriorPostState {
+  xPosted: boolean;
+  blueskyPosted: boolean;
+}
+
 export const updateStatusToPosted = async (
   pageId: string,
+  result: PostResult,
   postedAt: Date,
   links: PostedLinks = {},
+  prior: PriorPostState = { xPosted: false, blueskyPosted: false },
 ): Promise<void> => {
+  const xOk = result.x?.ok === true;
+  const blueskyOk = result.bluesky?.ok === true;
+  // properties を build。両 false (かつ prior も両 false) なら properties は空のまま skip。
+  const properties: Record<string, unknown> = {};
+  if (xOk) properties.x_posted = { checkbox: true };
+  if (blueskyOk) properties.bluesky_posted = { checkbox: true };
+  // 「今回成功」または「prior で既に true」のいずれかで投稿済扱い。
+  const xPostedEffective = xOk || prior.xPosted;
+  const blueskyPostedEffective = blueskyOk || prior.blueskyPosted;
+  const bothOk = xPostedEffective && blueskyPostedEffective;
+  if (bothOk) {
+    properties.Status = { status: { name: STATUS.POSTED } };
+    properties['投稿日時'] = { date: { start: postedAt.toISOString() } };
+  }
+
+  if (Object.keys(properties).length === 0) {
+    logger.info('notion', 'no platform succeeded, skipping status update', { pageId });
+    return;
+  }
+
   const client = buildClient();
+  // Notion SDK の properties 型は厳格 union だが、本 fn は per-platform 制御で
+  // 動的に組み立てるため、buildBaseProperties / createDraftPage と同様 cast で渡す。
   await client.pages.update({
     page_id: pageId,
-    properties: {
-      Status: { status: { name: STATUS.POSTED } },
-      '投稿日時': { date: { start: postedAt.toISOString() } },
-    },
+    properties: properties as Parameters<typeof client.pages.update>[0]['properties'],
   });
-  const bookmarkCount = await appendPostBookmarks(client, pageId, links);
+  // 成功 platform のみ bookmark append (links が無い場合は skip される)。
+  const bookmarkLinks: PostedLinks = {};
+  if (xOk && links.x) bookmarkLinks.x = links.x;
+  if (blueskyOk && links.bluesky) bookmarkLinks.bluesky = links.bluesky;
+  // bookmark append は audit trail (Notion 上で投稿 URL に辿れる) で、SNS 投稿 (live) と Status update
+  // (成功) は既に完了している。ここで Notion blocks.children.append が 5xx / timeout で失敗しても
+  // publish 全体を fatal にすると、ユーザーから見れば「投稿成功 + DB 整合 OK だが exit 1」になり
+  // 二重投稿リスクが生じる (cron 再走で同じ approved を再投稿してしまう恐れ)。bookmark 喪失は
+  // audit trail 欠落として error level で残し、上位は成功扱いに戻す。
+  let bookmarkCount = 0;
+  try {
+    bookmarkCount = await appendPostBookmarks(client, pageId, bookmarkLinks);
+  } catch (err) {
+    logger.error('notion', 'bookmark append failed (status update succeeded)', {
+      pageId,
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
   logger.info('notion', 'status updated to posted', {
     pageId,
     bookmarks: bookmarkCount,
+    xOk,
+    blueskyOk,
+    priorXPosted: prior.xPosted,
+    priorBlueskyPosted: prior.blueskyPosted,
+    bothOk,
   });
 };
 
@@ -435,6 +497,10 @@ export const fetchPageById = async (pageId: string): Promise<DraftPayload> => {
     dropPercent: Math.round(Math.round(rawDropPercent * 1_000_000) / 10_000),
     category,
     postedAt: extractDate(props['投稿日時']),
+    // Notion DB の checkbox property 名は `x_posted` / `bluesky_posted` (lowercase snake_case)。
+    // 不在 / null は false 扱い (extractCheckbox の null-safe default)。
+    xPosted: extractCheckbox(props.x_posted),
+    blueskyPosted: extractCheckbox(props.bluesky_posted),
   };
 };
 
