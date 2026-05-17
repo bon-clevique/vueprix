@@ -24,7 +24,7 @@
   "dependencies": {
     "@atproto/api": "^0.19.13",
     "@aws-sdk/hash-node": "^3.374.0",
-    "@aws-sdk/signature-v4": "^3.370.0",
+    "@aws-sdk/signature-v4": "^3.374.0",
     "@notionhq/client": "^5.20.0",
     "@smithy/protocol-http": "^5.3.14",
     "axios": "^1.16.0",
