@@ -16,31 +16,31 @@ describe('buildAffiliateUrl', () => {
 });
 
 describe('requirePartnerTag', () => {
-  const original = process.env.PAAPI_PARTNER_TAG;
+  const original = process.env.AMAZON_PARTNER_TAG;
 
   beforeEach(() => {
-    delete process.env.PAAPI_PARTNER_TAG;
+    delete process.env.AMAZON_PARTNER_TAG;
   });
 
   afterEach(() => {
     if (original === undefined) {
-      delete process.env.PAAPI_PARTNER_TAG;
+      delete process.env.AMAZON_PARTNER_TAG;
     } else {
-      process.env.PAAPI_PARTNER_TAG = original;
+      process.env.AMAZON_PARTNER_TAG = original;
     }
   });
 
   it('returns the env value when set', () => {
-    process.env.PAAPI_PARTNER_TAG = 'vueprix-22';
+    process.env.AMAZON_PARTNER_TAG = 'vueprix-22';
     expect(requirePartnerTag()).toBe('vueprix-22');
   });
 
   it('throws when env is missing', () => {
-    expect(() => requirePartnerTag()).toThrow(/PAAPI_PARTNER_TAG/);
+    expect(() => requirePartnerTag()).toThrow(/AMAZON_PARTNER_TAG/);
   });
 
   it('throws on empty string', () => {
-    process.env.PAAPI_PARTNER_TAG = '';
-    expect(() => requirePartnerTag()).toThrow(/PAAPI_PARTNER_TAG/);
+    process.env.AMAZON_PARTNER_TAG = '';
+    expect(() => requirePartnerTag()).toThrow(/AMAZON_PARTNER_TAG/);
   });
 });

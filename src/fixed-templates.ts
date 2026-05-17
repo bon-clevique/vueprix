@@ -12,7 +12,7 @@ import {
 //   - ASIN (title)
 //   - 商品名 (rich_text)
 //   - 投稿文 (rich_text): 値下げ前後の固定の紹介文。空文字 / 未設定の ASIN は投稿対象外
-//   - 参考定価 (number): 手動入力の希望小売価格 / 旧定価。PA-API SavingBasis 不在時の reference 候補
+//   - 参考定価 (number): 手動入力の希望小売価格 / 旧定価。Keepa fallback 不在時の reference 候補
 //   - Amazon URL (url)
 //   - 登録日 (date)
 //

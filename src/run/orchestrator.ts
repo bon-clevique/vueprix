@@ -13,7 +13,6 @@ import {
   queryDuplicateAsins,
   type DraftCandidate,
 } from '../notion.js';
-import { getItems, type ProductInfo } from '../paapi.js';
 import { buildKeepaProduct, collectDeals } from '../pipelines/deals.js';
 import { collectFixed, publishFixedCandidates } from '../pipelines/fixed.js';
 import { collectBrandHits } from '../pipelines/brand.js';
@@ -133,20 +132,9 @@ export const main = async (): Promise<void> => {
     if (targets.length === 0) {
       logger.info('orchestrator', 'no targets, run finished');
     } else {
-      // PA-API がある場合は最優先、なければ Keepa 由来 ProductInfo で続行
-      let paapiProducts: ProductInfo[] = [];
-      try {
-        paapiProducts = await getItems(targets.map((t) => t.asin));
-      } catch (err) {
-        logger.warn('orchestrator', 'PA-API getItems failed, falling back to Keepa-only', {
-          error: err instanceof Error ? err.message : String(err),
-        });
-      }
-
-      const paapiByAsin = new Map(paapiProducts.map((p) => [p.asin, p]));
-
       for (const target of targets) {
-        const product = paapiByAsin.get(target.asin) ?? buildKeepaProduct(target, partnerTag);
+        // Keepa-only 経路: PA-API 廃止により Keepa 由来 product info を直接組み立てる。
+        const product = buildKeepaProduct(target, partnerTag);
         // postText は Notion AI で生成する運用に移行したため、ドラフト作成時は空文字列で初期化する。
         // Amazon URL は null で初期化 (PR-#47)。bon が サクラチェッカー + Amazon 確認後に手動入力。
         const draft: DraftCandidate = {

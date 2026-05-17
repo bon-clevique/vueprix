@@ -4,9 +4,18 @@ import { KEEPA_CATEGORIES, MIN_PRICE_YEN } from '../config.js';
 import { calcDropPercent, isGoodDeal } from '../filter.js';
 import { getDeals } from '../keepa.js';
 import { logger } from '../logger.js';
-import type { ProductInfo } from '../paapi.js';
 import { passesTitleWhitelist } from '../title-filter.js';
 import type { Candidate } from '../types.js';
+
+// orchestrator が target 1 件あたり 1 つ持ち回す product info。
+// Keepa 由来 field のみで構成し、affiliateUrl は buildAffiliateUrl で組み立てる。
+export interface KeepaProduct {
+  asin: string;
+  title: string;
+  imageUrl: string;
+  currentPrice: number;
+  affiliateUrl: string;
+}
 
 export interface CollectDealsResult {
   candidates: Candidate[];
@@ -57,9 +66,9 @@ export const collectDeals = async (): Promise<CollectDealsResult> => {
   return { candidates, lastTokensLeft };
 };
 
-// PA-API がない (or fail) 場合の Keepa 由来 ProductInfo fallback。
-// orchestrator が PA-API GetItems の結果と組み合わせて使う。
-export const buildKeepaProduct = (c: Candidate, partnerTag: string): ProductInfo => ({
+// Keepa 由来の Candidate から orchestrator が draft 作成時に必要な product info を組み立てる。
+// PA-API 廃止後は本 fn が唯一の product info 供給源。imageUrl は Keepa から取れないため空文字列。
+export const buildKeepaProduct = (c: Candidate, partnerTag: string): KeepaProduct => ({
   asin: c.asin,
   title: c.title,
   imageUrl: '',

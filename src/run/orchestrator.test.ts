@@ -4,7 +4,6 @@ import type { FixedListing } from '../fixed-templates.js';
 // 外部 I/O dependency をすべてモック化。各 test 内で mockResolved* を上書きしてシナリオを切替える。
 const getDealsMock = vi.fn();
 const checkAsinMock = vi.fn();
-const getItemsMock = vi.fn();
 const createDraftPageMock = vi.fn();
 const createPostedPageMock = vi.fn();
 const queryDuplicateAsinsMock = vi.fn();
@@ -23,10 +22,6 @@ vi.mock('../pipelines/brand.js', () => ({
 vi.mock('../keepa.js', () => ({
   getDeals: (...args: unknown[]) => getDealsMock(...args),
   checkAsin: (...args: unknown[]) => checkAsinMock(...args),
-}));
-
-vi.mock('../paapi.js', () => ({
-  getItems: (...args: unknown[]) => getItemsMock(...args),
 }));
 
 vi.mock('../notion.js', () => ({
@@ -76,7 +71,6 @@ const dealsResult = (deals: unknown[], tokensLeft: number | null = null) => ({ d
 const resetAllMocks = () => {
   getDealsMock.mockReset();
   checkAsinMock.mockReset();
-  getItemsMock.mockReset();
   createDraftPageMock.mockReset();
   createPostedPageMock.mockReset();
   queryDuplicateAsinsMock.mockReset();
@@ -92,7 +86,6 @@ const resetAllMocks = () => {
   // (各 test が個別カテゴリで mockImplementation すれば、その値が lastTokensLeft に反映される)
   getDealsMock.mockResolvedValue(dealsResult([], null));
   checkAsinMock.mockResolvedValue(null);
-  getItemsMock.mockResolvedValue([]);
   createDraftPageMock.mockResolvedValue('page-mock-id');
   createPostedPageMock.mockResolvedValue('posted-page-mock-id');
   queryDuplicateAsinsMock.mockResolvedValue(new Set<string>());
@@ -130,7 +123,7 @@ describe('orchestrator.main integration', () => {
 
   beforeEach(() => {
     resetAllMocks();
-    process.env.PAAPI_PARTNER_TAG = 'test-tag-22';
+    process.env.AMAZON_PARTNER_TAG = 'test-tag-22';
     // KEEPA_CATEGORIES は config.ts に 5 件あるので、各 categoryId について getDealsMock が呼ばれる。
     // default で空配列を返すので、test 内で個別カテゴリだけ override する。
   });
@@ -232,49 +225,23 @@ describe('orchestrator.main integration', () => {
     expect(createDraftPageMock).toHaveBeenCalledTimes(5);
   });
 
-  it('falls back to Keepa-only when PA-API getItems throws', async () => {
+  it('builds draft from Keepa-only product info (PA-API 廃止後の唯一経路)', async () => {
+    // PA-API 廃止により、orchestrator は target 1 件あたり buildKeepaProduct を直呼びする。
+    // title / currentPrice は Keepa 由来の Candidate そのまま、affiliateUrl は partnerTag から組み立てる。
     getDealsMock.mockImplementation((categoryId: number) => {
       if (categoryId === 57239051) {
-        return Promise.resolve(dealsResult([buildDeal({ asin: 'B000FALL', title: '国産 フォールバック商品' })]));
+        return Promise.resolve(dealsResult([buildDeal({ asin: 'B000KEEPA', title: '国産 Keepa Title' })]));
       }
       return Promise.resolve(dealsResult([]));
     });
-    getItemsMock.mockRejectedValueOnce(new Error('PA-API down'));
 
     const { main } = await import('../draft.js');
     await main();
 
-    // PA-API 失敗でも Keepa 由来データで draft 作成は継続する
     expect(createDraftPageMock).toHaveBeenCalledTimes(1);
     const draftArg = createDraftPageMock.mock.calls[0]?.[0] as { asin: string; title: string };
-    expect(draftArg.asin).toBe('B000FALL');
-    // PA-API fallback 時は Keepa の title を使う
-    expect(draftArg.title).toBe('国産 フォールバック商品');
-  });
-
-  it('uses PA-API product info when available (preferred over Keepa fallback)', async () => {
-    getDealsMock.mockImplementation((categoryId: number) => {
-      if (categoryId === 57239051) {
-        return Promise.resolve(dealsResult([buildDeal({ asin: 'B000PA', title: '国産 Keepa Title' })]));
-      }
-      return Promise.resolve(dealsResult([]));
-    });
-    getItemsMock.mockResolvedValue([
-      {
-        asin: 'B000PA',
-        title: 'PA-API Official Title',
-        imageUrl: 'https://example.com/img.jpg',
-        currentPrice: 800,
-        affiliateUrl: 'https://www.amazon.co.jp/dp/B000PA?tag=test-tag-22',
-      },
-    ]);
-
-    const { main } = await import('../draft.js');
-    await main();
-
-    expect(createDraftPageMock).toHaveBeenCalledTimes(1);
-    const draftArg = createDraftPageMock.mock.calls[0]?.[0] as { title: string };
-    expect(draftArg.title).toBe('PA-API Official Title');
+    expect(draftArg.asin).toBe('B000KEEPA');
+    expect(draftArg.title).toBe('国産 Keepa Title');
   });
 
   it('returns early when no targets remain after filtering', async () => {
@@ -291,8 +258,6 @@ describe('orchestrator.main integration', () => {
     await main();
 
     expect(createDraftPageMock).not.toHaveBeenCalled();
-    // PA-API も呼ばれないはず (targets=0 で early return)
-    expect(getItemsMock).not.toHaveBeenCalled();
   });
 
   it('drops candidates whose title does not match category whitelist', async () => {
@@ -431,158 +396,8 @@ describe('orchestrator.main integration', () => {
     expect(appendHistoryMock).not.toHaveBeenCalled();
   });
 
-  it('uses PA-API SavingBasis as reference when present, overriding Keepa fallback', async () => {
-    // Keepa では 1% drop (閾値未満) だが、PA-API SavingBasis (¥1,490) で 28% drop → 投稿される。
-    // B07B5CD8NY 想定シナリオ: current=1080, Keepa-only では拾えないが SavingBasis で復活する。
-    checkAsinMock.mockImplementation((asin: string) => {
-      if (asin === 'B07B5CD8NY') {
-        return Promise.resolve({
-          asin,
-          title: 'クリニカ デンタルフロス',
-          currentPrice: 1080,
-          referencePrice: 1094,           // Keepa new-avg fallback
-          referenceSource: 'new-avg' as const,
-          dropPercent: 1,                 // Keepa fallback だと閾値未満
-        });
-      }
-      return Promise.resolve(null);
-    });
-    fetchFixedListingsMock.mockResolvedValue(
-      new Map<string, FixedListing>([
-        ['B07B5CD8NY', { description: 'Y字フロスでスキマケアに最適。' }],
-      ]),
-    );
-    getItemsMock.mockResolvedValue([
-      {
-        asin: 'B07B5CD8NY',
-        title: 'クリニカ デンタルフロス',
-        imageUrl: '',
-        currentPrice: 1080,
-        affiliateUrl: 'https://www.amazon.co.jp/dp/B07B5CD8NY',
-        savingBasis: 1490,
-      },
-    ]);
-    dispatchMock.mockResolvedValue({
-      x: { ok: true, url: 'https://x.com/post/x' },
-      bluesky: { ok: true, url: 'https://bsky.app/post/y' },
-    });
-
-    const { main } = await import('../draft.js');
-    await main();
-
-    // SavingBasis (1490) ベースで dropPercent = round((1490-1080)/1490*100) = 28 → 閾値 15 を超えて投稿される
-    expect(dispatchMock).toHaveBeenCalledTimes(1);
-    const dispatchInput = dispatchMock.mock.calls[0]?.[1] as { text: string };
-    expect(dispatchInput.text).toContain('【28% OFF】');
-    expect(dispatchInput.text).toContain('¥1,490');
-    expect(dispatchInput.text).toContain('¥1,080');
-
-    expect(createPostedPageMock).toHaveBeenCalledTimes(1);
-    const postedArg = createPostedPageMock.mock.calls[0]?.[0] as {
-      referencePrice: number;
-      dropPercent: number;
-    };
-    expect(postedArg.referencePrice).toBe(1490);
-    expect(postedArg.dropPercent).toBe(28);
-  });
-
-  it('falls back to Keepa when SavingBasis indicates suspiciously high drop (>95%, sanity cap)', async () => {
-    // PA-API が ¥99,999 を返した (異常値) → cap 超過で Keepa fallback (20%) に落とす。誇大広告防止。
-    checkAsinMock.mockImplementation((asin: string) => {
-      if (asin === 'B0C1JGD2T6') {
-        return Promise.resolve({
-          asin,
-          title: 'カリタ コーヒーフィルター',
-          currentPrice: 800,
-          referencePrice: 1000,
-          referenceSource: 'list-price' as const,
-          dropPercent: 20,
-        });
-      }
-      return Promise.resolve(null);
-    });
-    fetchFixedListingsMock.mockResolvedValue(
-      new Map<string, FixedListing>([
-        ['B0C1JGD2T6', { description: 'カリタの定番フィルター。' }],
-      ]),
-    );
-    getItemsMock.mockResolvedValue([
-      {
-        asin: 'B0C1JGD2T6',
-        title: 'カリタ コーヒーフィルター',
-        imageUrl: '',
-        currentPrice: 800,
-        affiliateUrl: 'https://www.amazon.co.jp/dp/B0C1JGD2T6',
-        savingBasis: 99999,  // 異常値: (99999-800)/99999 = 99.2% > 95
-      },
-    ]);
-    dispatchMock.mockResolvedValue({
-      x: { ok: true, url: 'https://x.com/p' },
-      bluesky: { ok: true, url: 'https://bsky.app/p' },
-    });
-
-    const { main } = await import('../draft.js');
-    await main();
-
-    expect(dispatchMock).toHaveBeenCalledTimes(1);
-    const dispatchInput = dispatchMock.mock.calls[0]?.[1] as { text: string };
-    expect(dispatchInput.text).toContain('【20% OFF】');  // Keepa fallback
-    const postedArg = createPostedPageMock.mock.calls[0]?.[0] as { referencePrice: number };
-    expect(postedArg.referencePrice).toBe(1000);  // SavingBasis 99999 が rejected、Keepa の 1000 が採用
-  });
-
-  it('falls back to Keepa reference when SavingBasis is missing', async () => {
-    // PA-API レスポンスに savingBasis 無し → Keepa fallback (20% drop) で投稿される。
-    checkAsinMock.mockImplementation((asin: string) => {
-      if (asin === 'B0C1JGD2T6') {
-        return Promise.resolve({
-          asin,
-          title: 'カリタ コーヒーフィルター',
-          currentPrice: 800,
-          referencePrice: 1000,
-          referenceSource: 'list-price' as const,
-          dropPercent: 20,
-        });
-      }
-      return Promise.resolve(null);
-    });
-    fetchFixedListingsMock.mockResolvedValue(
-      new Map<string, FixedListing>([
-        ['B0C1JGD2T6', { description: 'カリタの定番フィルター。' }],
-      ]),
-    );
-    getItemsMock.mockResolvedValue([
-      {
-        asin: 'B0C1JGD2T6',
-        title: 'カリタ コーヒーフィルター',
-        imageUrl: '',
-        currentPrice: 800,
-        affiliateUrl: 'https://www.amazon.co.jp/dp/B0C1JGD2T6',
-        // savingBasis なし
-      },
-    ]);
-    dispatchMock.mockResolvedValue({
-      x: { ok: true, url: 'https://x.com/p' },
-      bluesky: { ok: true, url: 'https://bsky.app/p' },
-    });
-
-    const { main } = await import('../draft.js');
-    await main();
-
-    expect(dispatchMock).toHaveBeenCalledTimes(1);
-    const dispatchInput = dispatchMock.mock.calls[0]?.[1] as { text: string };
-    expect(dispatchInput.text).toContain('【20% OFF】');  // Keepa fallback の dropPercent
-
-    const postedArg = createPostedPageMock.mock.calls[0]?.[0] as {
-      referencePrice: number;
-      dropPercent: number;
-    };
-    expect(postedArg.referencePrice).toBe(1000);  // Keepa list-price
-    expect(postedArg.dropPercent).toBe(20);
-  });
-
-  it('skips fixed candidate when neither SavingBasis nor Keepa reach threshold', async () => {
-    // Keepa 1% + SavingBasis なし or current 以下 → 閾値判定で skip、投稿されない。
+  it('skips fixed candidate when Keepa drop is below threshold and no manual reference is set', async () => {
+    // Keepa 1% + manual reference 無し → 閾値判定で skip、投稿されない。
     checkAsinMock.mockImplementation((asin: string) => {
       if (asin === 'B07B5CD8NY') {
         return Promise.resolve({
@@ -599,7 +414,6 @@ describe('orchestrator.main integration', () => {
     fetchFixedListingsMock.mockResolvedValue(
       new Map<string, FixedListing>([['B07B5CD8NY', { description: 'Y字フロス。' }]]),
     );
-    getItemsMock.mockResolvedValue([]);  // PA-API 空レスポンス
 
     const { main } = await import('../draft.js');
     await main();
@@ -634,8 +448,8 @@ describe('orchestrator.main integration', () => {
     expect(createPostedPageMock).not.toHaveBeenCalled();
   });
 
-  it('uses manual reference price when SavingBasis is missing and Keepa drop is below threshold', async () => {
-    // B07B5CD8NY 想定: current=1080, Keepa fallback 1% (閾値未満), SavingBasis 無し。
+  it('uses manual reference price when Keepa drop is below threshold (Notion fallback)', async () => {
+    // B07B5CD8NY 想定: current=1080, Keepa fallback 1% (閾値未満)。
     // Notion 手動入力 参考定価 ¥1,490 で dropPercent = round((1490-1080)/1490*100) = 28 → 投稿される。
     checkAsinMock.mockImplementation((asin: string) => {
       if (asin === 'B07B5CD8NY') {
@@ -655,7 +469,6 @@ describe('orchestrator.main integration', () => {
         ['B07B5CD8NY', { description: 'Y字フロス。', manualReferencePrice: 1490 }],
       ]),
     );
-    getItemsMock.mockResolvedValue([]);  // SavingBasis 無し
     dispatchMock.mockResolvedValue({
       x: { ok: true, url: 'https://x.com/p' },
       bluesky: { ok: true, url: 'https://bsky.app/p' },
@@ -679,56 +492,6 @@ describe('orchestrator.main integration', () => {
     expect(postedArg.dropPercent).toBe(28);
   });
 
-  it('prefers SavingBasis over manual reference price when both present', async () => {
-    // SavingBasis (¥4,400) と manualReferencePrice (¥5,000) が両方ある場合、SavingBasis を優先。
-    checkAsinMock.mockImplementation((asin: string) => {
-      if (asin === 'B09JL4R6SX') {
-        return Promise.resolve({
-          asin,
-          title: 'HARIO ドリッパー',
-          currentPrice: 2903,
-          referencePrice: 4399,
-          referenceSource: 'list-price' as const,
-          dropPercent: 34,
-        });
-      }
-      return Promise.resolve(null);
-    });
-    fetchFixedListingsMock.mockResolvedValue(
-      new Map<string, FixedListing>([
-        ['B09JL4R6SX', { description: 'HARIO ドリッパー。', manualReferencePrice: 5000 }],
-      ]),
-    );
-    getItemsMock.mockResolvedValue([
-      {
-        asin: 'B09JL4R6SX',
-        title: 'HARIO ドリッパー',
-        imageUrl: '',
-        currentPrice: 2903,
-        affiliateUrl: 'https://www.amazon.co.jp/dp/B09JL4R6SX',
-        savingBasis: 4400,
-      },
-    ]);
-    dispatchMock.mockResolvedValue({
-      x: { ok: true, url: 'https://x.com/p' },
-      bluesky: { ok: true, url: 'https://bsky.app/p' },
-    });
-
-    const { main } = await import('../draft.js');
-    await main();
-
-    expect(dispatchMock).toHaveBeenCalledTimes(1);
-    const dispatchInput = dispatchMock.mock.calls[0]?.[1] as { text: string };
-    // SavingBasis 4400 ベース: round((4400-2903)/4400*100) = 34
-    expect(dispatchInput.text).toContain('【34% OFF】');
-    expect(dispatchInput.text).toContain('¥4,400');
-    expect(dispatchInput.text).toContain('¥2,903');
-
-    expect(createPostedPageMock).toHaveBeenCalledTimes(1);
-    const postedArg = createPostedPageMock.mock.calls[0]?.[0] as { referencePrice: number };
-    expect(postedArg.referencePrice).toBe(4400);  // manual 5000 ではなく SavingBasis 4400
-  });
-
   it('falls back to Keepa when manualReferencePrice <= current (defensive)', async () => {
     // manualReferencePrice (¥1,000) が current (¥1,080) 以下 → manual 採用しない → Keepa fallback。
     checkAsinMock.mockImplementation((asin: string) => {
@@ -749,7 +512,6 @@ describe('orchestrator.main integration', () => {
         ['B07B5CD8NY', { description: 'Y字フロス。', manualReferencePrice: 1000 }],
       ]),
     );
-    getItemsMock.mockResolvedValue([]);  // SavingBasis 無し
     dispatchMock.mockResolvedValue({
       x: { ok: true, url: 'https://x.com/p' },
       bluesky: { ok: true, url: 'https://bsky.app/p' },
@@ -789,7 +551,6 @@ describe('orchestrator.main integration', () => {
         ['B0C1JGD2T6', { description: 'カリタの定番フィルター。', manualReferencePrice: 999999 }],
       ]),
     );
-    getItemsMock.mockResolvedValue([]);  // SavingBasis 無し
     dispatchMock.mockResolvedValue({
       x: { ok: true, url: 'https://x.com/p' },
       bluesky: { ok: true, url: 'https://bsky.app/p' },
@@ -929,7 +690,7 @@ describe('orchestrator.main run-log integration', () => {
 
   beforeEach(() => {
     resetAllMocks();
-    process.env.PAAPI_PARTNER_TAG = 'test-tag-22';
+    process.env.AMAZON_PARTNER_TAG = 'test-tag-22';
   });
 
   afterEach(() => {
