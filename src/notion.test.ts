@@ -190,12 +190,13 @@ describe('updateStatusToPosted', () => {
     pagesUpdateMock.mockResolvedValueOnce({});
     blocksAppendMock.mockResolvedValueOnce({});
     const { updateStatusToPosted } = await import('./notion.js');
+    // publish.ts:154-156 の動作 (X 失敗時は `result.x?.url` が undefined となり links.x も渡らない)
+    // と整合させる。失敗 platform の link を渡さないため bookmark は Bluesky のみで append される。
     await updateStatusToPosted(
       'page-1',
       { x: { ok: false }, bluesky: { ok: true, url: 'https://bsky.app/profile/vueprix.bsky.social/post/abc' } },
       new Date('2026-05-09T14:00:00.000Z'),
       {
-        x: 'https://twitter.com/i/web/status/123', // X 失敗時の links.x は存在しない想定だが念のため
         bluesky: 'https://bsky.app/profile/vueprix.bsky.social/post/abc',
       },
     );
@@ -227,6 +228,52 @@ describe('updateStatusToPosted', () => {
     );
     expect(pagesUpdateMock).not.toHaveBeenCalled();
     expect(blocksAppendMock).not.toHaveBeenCalled();
+  });
+
+  // Code HIGH-1: prior 既投稿フラグありで残り platform retry 成功 → Status=posted に遷移する
+  // ケースを pin する。実シナリオ: 前回 run で X だけ投稿成功 (xPosted=true 保存)、Bluesky は
+  // 失敗で approved に残る → 今回 run で Bluesky retry 成功。bothOk = (false || true) && (true || false) = true。
+  it('sets Status=posted when prior.xPosted=true and bluesky succeeds now (retry completion)', async () => {
+    pagesUpdateMock.mockResolvedValueOnce({});
+    const { updateStatusToPosted } = await import('./notion.js');
+    await updateStatusToPosted(
+      'page-1',
+      { x: { ok: false }, bluesky: { ok: true } },
+      new Date('2026-05-09T14:00:00.000Z'),
+      {},
+      { xPosted: true, blueskyPosted: false }, // prior: X 投稿済
+    );
+    const arg = pagesUpdateMock.mock.calls[0]?.[0] as { properties: Record<string, unknown> };
+    expect(arg.properties.Status).toEqual({ status: { name: 'posted' } });
+    expect(arg.properties.bluesky_posted).toEqual({ checkbox: true });
+    // 今回 x は失敗 → checkbox は追加しない (prior の保存値はそのまま保持される)
+    expect(arg.properties.x_posted).toBeUndefined();
+  });
+
+  // Arch MED-3: bookmark append が throw しても Status update (pages.update) は成功扱いで
+  // 戻る (= updateStatusToPosted が reject しない) ことを pin する。bookmark 喪失 log は error
+  // level で出ることも併せて assert。
+  it('logs error and returns successfully when bookmark append throws (audit trail loss is non-fatal)', async () => {
+    pagesUpdateMock.mockResolvedValueOnce({});
+    blocksAppendMock.mockRejectedValueOnce(new Error('blocks append 5xx'));
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const { updateStatusToPosted } = await import('./notion.js');
+    await expect(
+      updateStatusToPosted(
+        'page-1',
+        { x: { ok: true }, bluesky: { ok: true } },
+        new Date('2026-05-09T14:00:00.000Z'),
+        { x: 'https://twitter.com/i/web/status/123', bluesky: 'https://bsky.app/profile/x/post/abc' },
+      ),
+    ).resolves.toBeUndefined();
+    // pages.update は呼ばれて完遂 (Status=posted)
+    expect(pagesUpdateMock).toHaveBeenCalledTimes(1);
+    expect(blocksAppendMock).toHaveBeenCalledTimes(1);
+    // logger.error 経由で 'bookmark append failed' line が console.error に流れる
+    const errLines = errorSpy.mock.calls.map((c) => String(c[0]));
+    const target = errLines.find((l) => l.includes('"bookmark append failed (status update succeeded)"'));
+    expect(target).toBeDefined();
+    errorSpy.mockRestore();
   });
 });
 

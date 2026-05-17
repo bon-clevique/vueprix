@@ -17,24 +17,18 @@ describe('buildKeepaProduct', () => {
     category: 'food',
   };
 
-  it('produces a ProductInfo with affiliate URL built from ASIN + partnerTag', () => {
-    const product = buildKeepaProduct(candidate, 'test-tag-22');
-    expect(product.asin).toBe('B0DEMO0001');
+  it('produces a minimal product info (title + currentPrice) from a Candidate', () => {
+    const product = buildKeepaProduct(candidate);
     expect(product.title).toBe('Demo product');
     expect(product.currentPrice).toBe(850);
-    expect(product.affiliateUrl).toBe(
-      'https://www.amazon.co.jp/dp/B0DEMO0001?tag=test-tag-22',
-    );
-    // imageUrl は Keepa 経路では取れないため空文字
-    expect(product.imageUrl).toBe('');
+    // dead fields (asin / imageUrl / affiliateUrl) は本 fn の戻り値から削除済 — pin で固定。
+    expect(product).toEqual({ title: 'Demo product', currentPrice: 850 });
   });
 
-  it('encodes ASIN and partner tag safely (URL injection guard)', () => {
-    const c: Candidate = { ...candidate, asin: 'B0/EVIL?x' };
-    const product = buildKeepaProduct(c, 'tag&inject=1');
-    expect(product.affiliateUrl).not.toContain('?x');
-    expect(product.affiliateUrl).not.toContain('&inject=1');
-    expect(product.affiliateUrl).toContain('B0%2FEVIL%3Fx');
-    expect(product.affiliateUrl).toContain('tag%26inject%3D1');
+  it('passes through arbitrary title / price untouched', () => {
+    const c: Candidate = { ...candidate, title: 'モバイルバッテリー 10000mAh', currentPrice: 2980 };
+    const product = buildKeepaProduct(c);
+    expect(product.title).toBe('モバイルバッテリー 10000mAh');
+    expect(product.currentPrice).toBe(2980);
   });
 });

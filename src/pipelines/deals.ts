@@ -1,4 +1,3 @@
-import { buildAffiliateUrl } from '../affiliate.js';
 import { mapKeepaCategoryToNotion } from '../category.js';
 import { KEEPA_CATEGORIES, MIN_PRICE_YEN } from '../config.js';
 import { calcDropPercent, isGoodDeal } from '../filter.js';
@@ -8,13 +7,13 @@ import { passesTitleWhitelist } from '../title-filter.js';
 import type { Candidate } from '../types.js';
 
 // orchestrator が target 1 件あたり 1 つ持ち回す product info。
-// Keepa 由来 field のみで構成し、affiliateUrl は buildAffiliateUrl で組み立てる。
+// 旧 field (`asin` / `imageUrl` / `affiliateUrl`) は orchestrator から参照されておらず dead だったため削除。
+// affiliateUrl は publishDealCandidates 側で partnerTag を使って組み立てるため、本 fn では不要。
+// imageUrl は Keepa 由来データに含まれない (空文字 hardcode だった) ため削除。
+// asin は呼び出し側で `target.asin` を直接持っているため重複保持を解消。
 export interface KeepaProduct {
-  asin: string;
   title: string;
-  imageUrl: string;
   currentPrice: number;
-  affiliateUrl: string;
 }
 
 export interface CollectDealsResult {
@@ -67,11 +66,8 @@ export const collectDeals = async (): Promise<CollectDealsResult> => {
 };
 
 // Keepa 由来の Candidate から orchestrator が draft 作成時に必要な product info を組み立てる。
-// PA-API 廃止後は本 fn が唯一の product info 供給源。imageUrl は Keepa から取れないため空文字列。
-export const buildKeepaProduct = (c: Candidate, partnerTag: string): KeepaProduct => ({
-  asin: c.asin,
+// PA-API 廃止後は本 fn が唯一の product info 供給源。
+export const buildKeepaProduct = (c: Candidate): KeepaProduct => ({
   title: c.title,
-  imageUrl: '',
   currentPrice: c.currentPrice,
-  affiliateUrl: buildAffiliateUrl(c.asin, partnerTag),
 });

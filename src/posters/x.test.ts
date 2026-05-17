@@ -83,6 +83,7 @@ describe('xPoster error log (Step 2-7)', () => {
     expect(log).toBeDefined();
     expect(log?.source).toBe('poster.x');
     expect(log?.message).toBe('X tweet failed');
+    expect(log?.asin).toBe('B0FKL');
     expect(log?.status).toBe(403);
     expect(log?.code).toBe(87);
     expect(log?.type).toBe('response');
@@ -139,10 +140,36 @@ describe('xPoster error log (Step 2-7)', () => {
     expect(log).toBeDefined();
     expect(log?.source).toBe('poster.x');
     expect(log?.message).toBe('X tweet failed');
+    expect(log?.asin).toBe('B0FKL');
     // 全 field undefined → JSON.stringify で省略される
     expect(log?.status).toBeUndefined();
     expect(log?.code).toBeUndefined();
     expect(log?.type).toBeUndefined();
     expect(log?.detail).toBeUndefined();
+  });
+
+  // Sec MED-1 pin: detail に env var の値が混入したら `[REDACTED]` に置換することを保証する。
+  // length cap (500 char) 内に env value が入っていれば全 occurrence が置換される。
+  it('redacts X API credentials embedded in error detail (defense-in-depth)', async () => {
+    process.env.X_API_KEY = 'super-secret-api-key-12345';
+    process.env.X_API_SECRET = 'super-secret-api-secret-67890';
+    const apiError = {
+      code: 401,
+      type: 'response',
+      data: {
+        detail: 'Authentication failed using key=super-secret-api-key-12345 and secret=super-secret-api-secret-67890',
+      },
+    };
+    tweetMock.mockRejectedValueOnce(apiError);
+
+    const { xPoster } = await import('./x.js');
+    await expect(xPoster.post({ asin: 'B0FKL', text: 'hello' })).rejects.toThrow();
+
+    const log = lastErrorLog();
+    expect(log?.detail).toBeDefined();
+    const detail = String(log?.detail);
+    expect(detail).not.toContain('super-secret-api-key-12345');
+    expect(detail).not.toContain('super-secret-api-secret-67890');
+    expect(detail).toContain('[REDACTED]');
   });
 });

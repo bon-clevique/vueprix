@@ -134,7 +134,8 @@ export const main = async (): Promise<void> => {
     } else {
       for (const target of targets) {
         // Keepa-only 経路: PA-API 廃止により Keepa 由来 product info を直接組み立てる。
-        const product = buildKeepaProduct(target, partnerTag);
+        // partnerTag は publishFixedCandidates が個別に使うため、buildKeepaProduct には不要。
+        const product = buildKeepaProduct(target);
         // postText は Notion AI で生成する運用に移行したため、ドラフト作成時は空文字列で初期化する。
         // Amazon URL は null で初期化 (PR-#47)。bon が サクラチェッカー + Amazon 確認後に手動入力。
         const draft: DraftCandidate = {

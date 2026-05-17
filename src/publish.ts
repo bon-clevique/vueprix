@@ -90,10 +90,13 @@ export const main = async (argv: readonly string[]): Promise<void> => {
     return;
   }
 
-  // X の文字数上限 (POST_TEXT_MAX_CHARS) を超える 投稿文 が Notion に書かれた場合、X は API エラー、
-  // Bluesky は成功する (Bluesky 300 chars 上限内のため)。anySucceeded(result) が true になり
-  // Status=posted に遷移し、X への投稿は永久に失われる silent data loss が発生する。両 SNS に
-  // 確実に投稿する目的を守るため上限超は publish 全体を refuse する (再投稿可能なまま approved に残す)。
+  // 旧実装では `anySucceeded(result)` で 1 つでも成功すれば Status=posted に遷移していたため
+  // X 文字数上限超で X 失敗 + Bluesky 成功となり、X 側の silent data loss が発生していた。
+  // 本 PR で全 required platform 成功時のみ posted に遷移するよう変更したが、X の文字数上限超は
+  // 依然両 SNS の投稿状態を不整合化させる (= X 不投稿で X side が approved に残り、cron で
+  // 同 ASIN を再 dispatch する流れに乗せると Bluesky が二重投稿される)。これを避けるため
+  // 上限超は publish 全体を refuse し、bon が Notion で 投稿文 を短縮した上で再投稿可能なまま
+  // approved に残す方針を維持する。
   if ([...payload.postText].length > POST_TEXT_MAX_CHARS) {
     logger.warn('publish', '投稿文 exceeds X char limit, refusing to post', {
       pageId: args.pageId,

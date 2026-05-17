@@ -322,7 +322,20 @@ export const updateStatusToPosted = async (
   const bookmarkLinks: PostedLinks = {};
   if (xOk && links.x) bookmarkLinks.x = links.x;
   if (blueskyOk && links.bluesky) bookmarkLinks.bluesky = links.bluesky;
-  const bookmarkCount = await appendPostBookmarks(client, pageId, bookmarkLinks);
+  // bookmark append は audit trail (Notion 上で投稿 URL に辿れる) で、SNS 投稿 (live) と Status update
+  // (成功) は既に完了している。ここで Notion blocks.children.append が 5xx / timeout で失敗しても
+  // publish 全体を fatal にすると、ユーザーから見れば「投稿成功 + DB 整合 OK だが exit 1」になり
+  // 二重投稿リスクが生じる (cron 再走で同じ approved を再投稿してしまう恐れ)。bookmark 喪失は
+  // audit trail 欠落として error level で残し、上位は成功扱いに戻す。
+  let bookmarkCount = 0;
+  try {
+    bookmarkCount = await appendPostBookmarks(client, pageId, bookmarkLinks);
+  } catch (err) {
+    logger.error('notion', 'bookmark append failed (status update succeeded)', {
+      pageId,
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
   logger.info('notion', 'status updated to posted', {
     pageId,
     bookmarks: bookmarkCount,
