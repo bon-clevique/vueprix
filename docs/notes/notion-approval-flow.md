@@ -35,6 +35,8 @@ DB: 「vueprix 投稿文」(`collection://35b3ad52-d5ca-80f3-b57f-000b174abea1`)
 | 割引率 | number (percent) | 0.15 = 15% (Notion percent property の保存形式) |
 | カテゴリ | select | `food` / `health` / `pc-desk` / `gaming` / `audio` / `fixed-list` |
 | 関連ガイドライン | relation | (任意) ガイドライン DB へのリンク |
+| x_posted | checkbox | X への投稿成功フラグ (bon 手動追加; 未 true の場合 publish 時に再送対象になる) |
+| bluesky_posted | checkbox | Bluesky への投稿成功フラグ (bon 手動追加; 未 true の場合 publish 時に再送対象になる) |
 
 ## Notion automation (Status changed to approved → Webhook)
 
