@@ -7,8 +7,9 @@ import {
   fetchPageById,
   updateStatusToPosted,
   type DraftPayload,
+  type PostedLinks,
 } from './notion.js';
-import { anySucceeded, dispatch, posters, type PostInput } from './posters/index.js';
+import { dispatch, posters, type PostInput, type PostResult } from './posters/index.js';
 
 interface PublishArgs {
   pageId: string;
@@ -103,9 +104,29 @@ export const main = async (argv: readonly string[]): Promise<void> => {
     return;
   }
 
+  // PR-1 Phase 2: per-platform 既投稿チェック。Notion checkbox `x_posted` / `bluesky_posted` が
+  // true の platform は dispatch から除外し、残り platform のみ retry する (silent loss 解消)。
+  const filteredPosters = posters.filter(
+    (p) => !(p.name === 'x' && payload.xPosted) && !(p.name === 'bluesky' && payload.blueskyPosted),
+  );
+  if (filteredPosters.length === 0) {
+    // 両既投稿。本来は payload.postedAt 早期 return ガード (line 71-) で先に止まる想定だが、
+    // checkbox は true で postedAt が空 (運用ミスで Status=approved に戻されたケース等) でも
+    // ここに来る。silent loss を避けるため warn のみで何もしない。
+    logger.warn('publish', 'all platforms already posted, nothing to do', {
+      pageId: args.pageId,
+      asin: payload.asin,
+      xPosted: payload.xPosted,
+      blueskyPosted: payload.blueskyPosted,
+    });
+    return;
+  }
+
   const input: PostInput = { asin: payload.asin, text: payload.postText };
-  const result = await dispatch(posters, input);
-  const succeeded = anySucceeded(result);
+  const result: PostResult = await dispatch(filteredPosters, input);
+  // allRequiredSucceeded: filteredPosters 全 poster が成功した場合のみ true。Status=posted への
+  // 遷移は両 platform 完遂時 (= 既投稿 platform 込みで全 platform 投稿済) のみ許可する。
+  const allRequiredSucceeded = filteredPosters.every((p) => result[p.name]?.ok === true);
   // post-history.jsonl の schema は `Record<string, boolean>` のまま維持 (URL を持つ新形式は
   // 過去 entry と互換性が崩れるため)。URL は Notion bookmark 化のみに使い、log/history には
   // 入れない。
@@ -126,20 +147,29 @@ export const main = async (argv: readonly string[]): Promise<void> => {
   };
   await appendHistory(historyEntry);
 
-  if (succeeded) {
-    const links = {
-      x: result.x?.url,
-      bluesky: result.bluesky?.url,
-    };
-    await updateStatusToPosted(args.pageId, new Date(), links);
+  // updateStatusToPosted は per-platform 制御に変更済 (Status=posted は両 platform 投稿済時のみ)。
+  // prior 既投稿フラグも渡し、前回 X だけ成功 → 今回 BSky retry 成功のような per-platform retry
+  // シナリオで両 SNS 完遂時に Status=posted に正しく進めるようにする。
+  // 失敗 platform は approved のまま残し、次回 publish 再実行で retry できる構造を維持する。
+  const links: PostedLinks = {
+    x: result.x?.url,
+    bluesky: result.bluesky?.url,
+  };
+  await updateStatusToPosted(args.pageId, result, new Date(), links, {
+    xPosted: payload.xPosted,
+    blueskyPosted: payload.blueskyPosted,
+  });
+
+  if (allRequiredSucceeded) {
     logger.info('publish', 'run finished', {
       durationMs: Date.now() - startedAt.getTime(),
       asin: payload.asin,
       result,
     });
   } else {
-    // 全 poster 失敗時は Status を posted に更新しない (再実行で再試行できるよう approved のまま残す)。
-    logger.warn('publish', 'all posters failed, leaving status=approved for retry', {
+    // dispatch 対象の poster のうち少なくとも 1 つが失敗。Status は approved のまま、
+    // 成功 platform の checkbox のみ更新済 → 次回 publish で残り platform を retry。
+    logger.warn('publish', 'some posters failed, leaving status=approved for retry', {
       asin: payload.asin,
       result,
     });

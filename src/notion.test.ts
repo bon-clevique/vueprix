@@ -125,28 +125,40 @@ describe('updateStatusToPosted', () => {
     else process.env.NOTION_VUEPRIX_DATA_SOURCE_ID = originalDs;
   });
 
-  it('updates Status=posted with 投稿日時 timestamp', async () => {
+  // PR-1 Phase 2: 新 signature `(pageId, result, postedAt, links?)`。result.x.ok / result.bluesky.ok を
+  // 見て per-platform 制御で properties を組み立てる。両成功時のみ Status=posted に遷移する。
+  it('updates Status=posted + x_posted + bluesky_posted with 投稿日時 when both succeeded', async () => {
     pagesUpdateMock.mockResolvedValueOnce({});
     const { updateStatusToPosted } = await import('./notion.js');
-    await updateStatusToPosted('page-1', new Date('2026-05-09T14:00:00.000Z'));
+    await updateStatusToPosted(
+      'page-1',
+      { x: { ok: true }, bluesky: { ok: true } },
+      new Date('2026-05-09T14:00:00.000Z'),
+    );
     expect(pagesUpdateMock).toHaveBeenCalledTimes(1);
     const arg = pagesUpdateMock.mock.calls[0]?.[0] as { page_id: string; properties: Record<string, unknown> };
     expect(arg.page_id).toBe('page-1');
-    // PR-8: Status は status type
     expect(arg.properties.Status).toEqual({ status: { name: 'posted' } });
     expect(arg.properties['投稿日時']).toEqual({ date: { start: '2026-05-09T14:00:00.000Z' } });
+    expect(arg.properties.x_posted).toEqual({ checkbox: true });
+    expect(arg.properties.bluesky_posted).toEqual({ checkbox: true });
     // links 未指定なら bookmark append は呼ばれない
     expect(blocksAppendMock).not.toHaveBeenCalled();
   });
 
-  it('appends X / Bluesky bookmark blocks when links are provided', async () => {
+  it('appends X / Bluesky bookmark blocks when links are provided and both succeeded', async () => {
     pagesUpdateMock.mockResolvedValueOnce({});
     blocksAppendMock.mockResolvedValueOnce({});
     const { updateStatusToPosted } = await import('./notion.js');
-    await updateStatusToPosted('page-1', new Date('2026-05-09T14:00:00.000Z'), {
-      x: 'https://twitter.com/i/web/status/123',
-      bluesky: 'https://bsky.app/profile/vueprix.bsky.social/post/abc',
-    });
+    await updateStatusToPosted(
+      'page-1',
+      { x: { ok: true }, bluesky: { ok: true } },
+      new Date('2026-05-09T14:00:00.000Z'),
+      {
+        x: 'https://twitter.com/i/web/status/123',
+        bluesky: 'https://bsky.app/profile/vueprix.bsky.social/post/abc',
+      },
+    );
     expect(blocksAppendMock).toHaveBeenCalledTimes(1);
     const arg = blocksAppendMock.mock.calls[0]?.[0] as {
       block_id: string;
@@ -159,22 +171,61 @@ describe('updateStatusToPosted', () => {
     ]);
   });
 
-  it('appends only the available link when one poster URL is missing', async () => {
-    pagesUpdateMock.mockResolvedValueOnce({});
-    blocksAppendMock.mockResolvedValueOnce({});
-    const { updateStatusToPosted } = await import('./notion.js');
-    await updateStatusToPosted('page-1', new Date('2026-05-09T14:00:00.000Z'), {
-      x: 'https://twitter.com/i/web/status/123',
-    });
-    expect(blocksAppendMock).toHaveBeenCalledTimes(1);
-    const arg = blocksAppendMock.mock.calls[0]?.[0] as { children: unknown[] };
-    expect(arg.children).toHaveLength(1);
-  });
-
   it('does not call blocks.append when no links are provided', async () => {
     pagesUpdateMock.mockResolvedValueOnce({});
     const { updateStatusToPosted } = await import('./notion.js');
-    await updateStatusToPosted('page-1', new Date('2026-05-09T14:00:00.000Z'), {});
+    await updateStatusToPosted(
+      'page-1',
+      { x: { ok: true }, bluesky: { ok: true } },
+      new Date('2026-05-09T14:00:00.000Z'),
+      {},
+    );
+    expect(blocksAppendMock).not.toHaveBeenCalled();
+  });
+
+  // PR-1 Phase 2: 新規 3 ケース pin
+  // (a) 両成功 → 既存 1st test で coverage
+  // (b) X 失敗 + BSky 成功 → Status 触らず、bluesky_posted のみ true、X bookmark 不在
+  it('does not touch Status / 投稿日時 when X failed but BSky succeeded (per-platform retry)', async () => {
+    pagesUpdateMock.mockResolvedValueOnce({});
+    blocksAppendMock.mockResolvedValueOnce({});
+    const { updateStatusToPosted } = await import('./notion.js');
+    await updateStatusToPosted(
+      'page-1',
+      { x: { ok: false }, bluesky: { ok: true, url: 'https://bsky.app/profile/vueprix.bsky.social/post/abc' } },
+      new Date('2026-05-09T14:00:00.000Z'),
+      {
+        x: 'https://twitter.com/i/web/status/123', // X 失敗時の links.x は存在しない想定だが念のため
+        bluesky: 'https://bsky.app/profile/vueprix.bsky.social/post/abc',
+      },
+    );
+    expect(pagesUpdateMock).toHaveBeenCalledTimes(1);
+    const arg = pagesUpdateMock.mock.calls[0]?.[0] as { properties: Record<string, unknown> };
+    // Status は touch しない
+    expect(arg.properties.Status).toBeUndefined();
+    expect(arg.properties['投稿日時']).toBeUndefined();
+    expect(arg.properties.x_posted).toBeUndefined();
+    expect(arg.properties.bluesky_posted).toEqual({ checkbox: true });
+    // bookmark は BSky のみ (X 失敗 → X bookmark なし)
+    expect(blocksAppendMock).toHaveBeenCalledTimes(1);
+    const blocksArg = blocksAppendMock.mock.calls[0]?.[0] as {
+      children: Array<{ type: string; bookmark: { url: string } }>;
+    };
+    expect(blocksArg.children).toEqual([
+      { object: 'block', type: 'bookmark', bookmark: { url: 'https://bsky.app/profile/vueprix.bsky.social/post/abc' } },
+    ]);
+  });
+
+  // (c) 両失敗 → pages.update が一切呼ばれない (early return)
+  it('does not call pages.update when both posters failed (no-op early return)', async () => {
+    const { updateStatusToPosted } = await import('./notion.js');
+    await updateStatusToPosted(
+      'page-1',
+      { x: { ok: false }, bluesky: { ok: false } },
+      new Date('2026-05-09T14:00:00.000Z'),
+      { x: 'https://twitter.com/i/web/status/123' },
+    );
+    expect(pagesUpdateMock).not.toHaveBeenCalled();
     expect(blocksAppendMock).not.toHaveBeenCalled();
   });
 });
@@ -227,7 +278,37 @@ describe('fetchPageById', () => {
       dropPercent: 15,
       category: 'food',
       postedAt: null,
+      // PR-1 Phase 2: checkbox property 不在時は false に丸める。
+      xPosted: false,
+      blueskyPosted: false,
     });
+  });
+
+  // PR-1 Phase 2: per-platform 既投稿フラグの抽出 pin。
+  it('extracts xPosted=true / blueskyPosted=true when both checkboxes are set', async () => {
+    pagesRetrieveMock.mockResolvedValueOnce(
+      buildPage('approved', {
+        x_posted: { checkbox: true },
+        bluesky_posted: { checkbox: true },
+      }),
+    );
+    const { fetchPageById } = await import('./notion.js');
+    const payload = await fetchPageById('page-1');
+    expect(payload.xPosted).toBe(true);
+    expect(payload.blueskyPosted).toBe(true);
+  });
+
+  it('extracts xPosted=true / blueskyPosted=false when only X has been posted (silent loss recovery target)', async () => {
+    pagesRetrieveMock.mockResolvedValueOnce(
+      buildPage('approved', {
+        x_posted: { checkbox: true },
+        bluesky_posted: { checkbox: false },
+      }),
+    );
+    const { fetchPageById } = await import('./notion.js');
+    const payload = await fetchPageById('page-1');
+    expect(payload.xPosted).toBe(true);
+    expect(payload.blueskyPosted).toBe(false);
   });
 
   it('extracts postedAt when 投稿日時 is set on the page', async () => {
