@@ -136,9 +136,6 @@ export interface GetDealsResult {
 // が adaptive に page を制御する設計に変更。本定数は caller 側 loop の最大ページ数 (上限) を意味する。
 // 1 token / call なので tokens 消費が増えるが、Pro プラン (1,440/day) に対しては十分余裕がある。
 export const KEEPA_DEAL_PAGE_MAX = 3;
-// pipelines/deals.ts や test 等で「デフォルトの開始 page」を参照したい局面用 (= 0 ではなく 1 page 分のみ
-// 取得したい test 等)。実運用 caller は loop index (0..MAX-1) を直接渡すため通常未参照。
-export const KEEPA_DEAL_PAGE_DEFAULT = 1;
 
 // deltaRange の絶対値下げ額。下限 1,500 円は誇大広告 (¥10→¥9 等) 排除のため維持。
 // 上限は旧 ¥100,000 だと高単価商品 (家電/モニター/コーヒー器具) を取りこぼすので、実質上限なしに緩和。

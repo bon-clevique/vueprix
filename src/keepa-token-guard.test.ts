@@ -35,4 +35,14 @@ describe('KeepaTokenGuard', () => {
     guard.updateTokensLeft(null);
     expect(guard.shouldCall(10)).toBe(true);
   });
+
+  it('updateTokensLeft is no-op for NaN / Infinity / negative', () => {
+    guard.updateTokensLeft(50);
+    guard.updateTokensLeft(NaN);
+    expect(guard.shouldCall(10)).toBe(true); // 50 維持
+    guard.updateTokensLeft(-1);
+    expect(guard.shouldCall(10)).toBe(true);
+    guard.updateTokensLeft(Infinity);
+    expect(guard.shouldCall(10)).toBe(true);
+  });
 });

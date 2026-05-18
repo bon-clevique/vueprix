@@ -65,7 +65,9 @@ export const queryBrandAsins = async (brand: string): Promise<QueryBrandAsinsRes
       brand,
       error: err instanceof Error ? err.message : String(err),
     });
-    return { asins: [], tokensLeft: null };
+    // tokensLeft: 0 を返すことで、以降の brand を guard が止める (連続 fail 検出の簡易版)。
+    // null だと updateTokensLeft が no-op で直前値が維持されるため、エラー伝播が効かない。
+    return { asins: [], tokensLeft: 0 };
   }
 };
 
@@ -103,6 +105,8 @@ const processChunk = async (
   chunk: readonly string[],
   candidates: Candidate[],
 ): Promise<void> => {
+  // 意図的 sequential: KeepaTokenGuard の state を ASIN 間で直列継承するため Promise.all 不可。
+  // 並列化すると shouldCall/updateTokensLeft 間に race が発生する (Spec §9.2 HIGH-2 参照)。
   for (let i = 0; i < chunk.length; i += 1) {
     if (candidates.length >= BRAND_QUOTA) return;
     if (!guard.shouldCall()) {
@@ -173,6 +177,8 @@ export const evaluateBrandAsins = async (
 // Phase 2 で KeepaTokenGuard を引数注入 — guard は run 全体で 1 instance を共有する。
 export const collectBrandHits = async (guard: KeepaTokenGuard): Promise<Candidate[]> => {
   const result: Candidate[] = [];
+  // 意図的 sequential: KeepaTokenGuard の state を brand 間で直列継承するため Promise.all 不可。
+  // 並列化すると shouldCall/updateTokensLeft 間に race が発生する (Spec §9.2 HIGH-2 参照)。
   for (const brand of WATCH_BRANDS) {
     try {
       if (!guard.shouldCall()) {

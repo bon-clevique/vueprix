@@ -181,4 +181,47 @@ describe('collectDeals (adaptive pagination)', () => {
       remaining: 3,
     });
   });
+
+  // (d) categoryQuota=0 defensive break: 未登録 categoryId が 'fixed-list' に fallback されると
+  // CATEGORY_QUOTA['fixed-list']=0 となり、page=0 で 1 件 API call → categoryCount=0 >= 0 で即 break。
+  // candidates は当該 category について 0 件 (push 直前で push されても categoryCount>=quota 判定で break)。
+  it('(d) breaks immediately when categoryQuota=0 (defensive, e.g. unmapped category → fixed-list fallback)', async () => {
+    // mapKeepaCategoryToNotion を全 category で 'fixed-list' (quota=0) にして
+    // 全 category で page=0 で即 break することを確認する。
+    vi.doMock('../category.js', () => ({
+      mapKeepaCategoryToNotion: () => 'fixed-list' as const,
+      CATEGORY_FIXED: 'fixed-list' as const,
+    }));
+    // module cache を reset して mock が反映された state で collectDeals を import する。
+    vi.resetModules();
+
+    getDealsMock.mockImplementation((_categoryId: number, _page: number) =>
+      Promise.resolve({
+        deals: [dealOf('B000FXLIST0')],
+        tokensLeft: 100,
+      }),
+    );
+
+    // pipelines/deals.ts は category.js を import するため、doMock 後に再 import が必要。
+    const { collectDeals } = await import('./deals.js');
+    const guard = new KeepaTokenGuard();
+    const result = await collectDeals(guard);
+
+    // 各 category で page=0 だけ 1 回呼ばれ、categoryCount=0 >= quota(0) で即 break。
+    // よって全 category について 1 page 分のみ getDeals 実行 (合計 = KEEPA_CATEGORIES.length call)。
+    expect(getDealsMock).toHaveBeenCalledTimes(KEEPA_CATEGORIES.length);
+    for (const call of getDealsMock.mock.calls) {
+      expect(call[1]).toBe(0);
+    }
+    // candidates は title-filter mock で全件 pass するため push されるが、categoryCount>=0 で
+    // 次 page には進まない (page=0 内で全 deal は inner for で処理されるため、得た deals 件数だけ
+    // candidates に詰まる)。本 test は API call 回数の defensive 性質を pin することが主眼。
+    // 全 category について 1 deal/page なので合計 candidates = KEEPA_CATEGORIES.length。
+    expect(result.candidates.length).toBe(KEEPA_CATEGORIES.length);
+    for (const c of result.candidates) {
+      expect(c.category).toBe('fixed-list');
+    }
+
+    vi.doUnmock('../category.js');
+  });
 });

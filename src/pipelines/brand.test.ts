@@ -180,7 +180,8 @@ describe('queryBrandAsins', () => {
     const { queryBrandAsins } = await import('./brand.js');
     const result = await queryBrandAsins('TestBrand');
     expect(result.asins).toEqual([]);
-    expect(result.tokensLeft).toBeNull();
+    // error 時 tokensLeft=0 を返し、以降の brand を guard が止める (連続 fail 検出の簡易版)。
+    expect(result.tokensLeft).toBe(0);
   });
 
   it('returns empty array on network error', async () => {
@@ -188,7 +189,7 @@ describe('queryBrandAsins', () => {
     const { queryBrandAsins } = await import('./brand.js');
     const result = await queryBrandAsins('TestBrand');
     expect(result.asins).toEqual([]);
-    expect(result.tokensLeft).toBeNull();
+    expect(result.tokensLeft).toBe(0);
   });
 
   it('throws when KEEPA_API_KEY is unset', async () => {
@@ -277,8 +278,9 @@ describe('collectBrandHits', () => {
     }
   });
 
-  it('isolates brand failure: if one query fails, others still succeed', async () => {
-    // 第 1 brand (Yamazaki) は query 失敗、他は成功
+  it('first brand query failure stops subsequent brands (defensive: tokensLeft=0 propagation)', async () => {
+    // Arch M3 (Phase 4.5): query 失敗時に tokensLeft=0 を返すことで、以降の brand を guard が止める。
+    // 1 brand の query 失敗 = 連続 fail の前触れと見なし、token 残量保全のため defensive に skip する設計。
     axiosPostMock
       .mockRejectedValueOnce(new Error('query failed for first brand'))
       .mockResolvedValue({ data: { asinList: ['B000000100', 'B000000101'], tokensLeft: 100 } });
@@ -287,12 +289,12 @@ describe('collectBrandHits', () => {
     );
     const { collectBrandHits } = await import('./brand.js');
     const result = await collectBrandHits(guard);
-    const asins = result.map((c) => c.asin);
-    // 第 1 brand (query 失敗) からは ASIN は来ない。B100/B101 のみ。
-    expect(asins).toContain('B000000100');
-    for (const a of asins) {
-      expect(['B000000100', 'B000000101']).toContain(a);
-    }
+    // 第 1 brand failure → tokensLeft=0 で guard が以降 skip。result は空。
+    expect(result).toEqual([]);
+    // 第 1 brand 以降は guard が query を止めるので、axiosPost は 1 回しか呼ばれない。
+    expect(axiosPostMock).toHaveBeenCalledTimes(1);
+    // checkAsinWithTokens は全 brand で呼ばれない (query が止まるため)。
+    expect(checkAsinWithTokensMock).not.toHaveBeenCalled();
   });
 
   it('skips ASINs where checkAsin returns null', async () => {
@@ -427,15 +429,15 @@ describe('collectBrandHits', () => {
   });
 
   // (b) Fallback 発火: 上位 6 件で valid 1 件 → 次 6 件 (rank 7-12) を追加 checkAsin。
-  //   合計 checkAsinWithTokens 呼出回数 = 12 (= BRAND_CHECKASIN_LIMIT * 2)。
-  it('Phase 2 (b) triggers fallback chunk (BRAND_CHECKASIN_LIMIT * 2 = 12 calls) when chunk1 yields < quota', async () => {
+  //   合計 checkAsinWithTokens 呼出回数 = 7 (chunk1: 6 件 + chunk2 の最初 asin[6] 採用直後 quota 充足で break)。
+  it('Phase 2 (b) triggers fallback chunk (chunk1 6 + chunk2 1 = 7 calls) when chunk1 yields < quota', async () => {
     const twelveAsins = Array.from({ length: 12 }, (_, i) => `B${String(i).padStart(9, '0')}`);
     axiosPostMock
       .mockResolvedValueOnce({ data: { asinList: twelveAsins, tokensLeft: 100 } })
       .mockResolvedValue({ data: { asinList: [], tokensLeft: 100 } });
     // 上位 6 件のうち 0 番目だけ valid (drop 25%)、1-5 番目は drop 10% (閾値未満) で filter 落ち。
     // 次 6 件 (6-11) のうち 6 番目だけ valid (drop 25%)、7-11 番目は drop 10% で filter 落ち。
-    // → 採用 2 件 (asin[0], asin[6]), 合計 12 call。
+    // → 採用 2 件 (asin[0], asin[6]), 合計 7 call (chunk1: 6 件、chunk2 で asin[6] 採用後 quota 充足で break)。
     checkAsinWithTokensMock.mockImplementation(async (asin: string) => {
       const idx = twelveAsins.indexOf(asin);
       const drop = idx === 0 || idx === 6 ? 25 : 10;
