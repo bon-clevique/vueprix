@@ -133,6 +133,12 @@ export const BRAND_DEFAULT_CATEGORY: NotionCategory = 'kitchen';
 // 3 brand × 2 件 = 6 件/run。MAX_POSTS_PER_RUN=30 に十分収まる。
 export const BRAND_QUOTA = 2;
 
+// brand 経路で 1 brand あたり checkAsin を呼ぶ件数の base limit。
+// 上位 N 件 (deltaPercent90_AMAZON asc = 値下げ大きい順) を checkAsin、quota 未充足なら
+// fallback で次の N 件 (= 合計 max 2 × N = 12 件) を追加 checkAsin。
+// quota=2 × 3 (filter 落ち余裕) = 6 を base、fallback 2 段で最大 12 件まで拡張。
+export const BRAND_CHECKASIN_LIMIT = 6;
+
 // Keepa Product Finder (/query) で要求する values。perPage は max 50。
 // page 0 のみ (page 1-9 は要望次第)。
 export const BRAND_PAGE_SIZE = 50;

@@ -203,41 +203,55 @@ export const pickReferencePrice = (
   return null;
 };
 
-export const checkAsin = async (asin: string): Promise<PriceHistory | null> => {
+// tokensLeft を呼出側に返す版。pipelines/brand.ts が KeepaTokenGuard.updateTokensLeft に渡すため
+// に追加 (Phase 2)。既存 checkAsin は本 fn の thin wrapper にして history のみ取り出す。
+// tokensLeft は Keepa response の optional field なので null 許容。
+export const checkAsinWithTokens = async (
+  asin: string,
+): Promise<{ history: PriceHistory | null; tokensLeft: number | null }> => {
   const url = `${KEEPA_BASE}/product`;
   const res = await axios.get<KeepaProductResponse>(url, {
     params: { key: apiKey(), domain: KEEPA_DOMAIN, asin, stats: HISTORY_DAYS },
     timeout: 30_000,
   });
+  const tokensLeft = res.data.tokensLeft ?? null;
   logger.info('keepa', 'product fetched', {
     asin,
-    tokensLeft: res.data.tokensLeft ?? null,
+    tokensLeft,
   });
   const product = res.data.products?.[0];
-  if (!product?.stats) return null;
+  if (!product?.stats) return { history: null, tokensLeft };
   // Amazon 出品なし商品 (current[0]=-1) でも New (current[1]) で投稿できるよう fallback する。
   const current = toYen(product.stats.current?.[0]) || toYen(product.stats.current?.[1]);
-  if (!current) return null;
+  if (!current) return { history: null, tokensLeft };
   const picked = pickReferencePrice(product.stats, current);
   if (!picked) {
     logger.debug('keepa', 'no reference price above current', { asin, current });
-    return null;
+    return { history: null, tokensLeft };
   }
   const title = typeof product.title === 'string' && product.title.length > 0 ? product.title : '';
   if (!title) {
     logger.debug('keepa', 'checkAsin dropped (no title)', { asin });
-    return null;
+    return { history: null, tokensLeft };
   }
   // calcDropPercent(current, reference) シグネチャに整列。引数順は (current, picked.price)。
   // picked.price > current は pickReferencePrice の post-condition で保証されるが、Math.max(0, ...) は
   // 丸め誤差や invariant 違反時の防御として保持 (二重防御)。
   const dropPercent = Math.max(0, calcDropPercent(current, picked.price));
   return {
-    asin,
-    title,
-    currentPrice: current,
-    referencePrice: picked.price,
-    referenceSource: picked.source,
-    dropPercent,
+    history: {
+      asin,
+      title,
+      currentPrice: current,
+      referencePrice: picked.price,
+      referenceSource: picked.source,
+      dropPercent,
+    },
+    tokensLeft,
   };
+};
+
+export const checkAsin = async (asin: string): Promise<PriceHistory | null> => {
+  const { history } = await checkAsinWithTokens(asin);
+  return history;
 };

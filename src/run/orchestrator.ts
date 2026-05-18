@@ -7,6 +7,7 @@ import {
 } from '../config.js';
 import { filterByActiveAsins } from '../filter.js';
 import { readRecentAsins } from '../history.js';
+import { KeepaTokenGuard } from '../keepa-token-guard.js';
 import { logger } from '../logger.js';
 import {
   createDraftPage,
@@ -91,11 +92,16 @@ export const main = async (): Promise<void> => {
       union: activeAsins.size,
     });
 
+    // KeepaTokenGuard: 各 Keepa call 前に token 残量を check して低残量時 silent skip する防御層。
+    // Phase 2 (logical-forging-lerdorf) で brand 経路に統合。deals / fixed 経路への拡張は OoS。
+    const keepaGuard = new KeepaTokenGuard();
     const { candidates: dealCandidates, lastTokensLeft } = await collectDeals();
     tokensLeft = lastTokensLeft;
     dealsTotal = dealCandidates.length;
+    // deals 経路の最新 tokensLeft を guard に伝搬しておく (brand 経路の最初の判定で参照される)。
+    keepaGuard.updateTokensLeft(lastTokensLeft);
     const fixedCandidates = await collectFixed();
-    const brandCandidates = await collectBrandHits();
+    const brandCandidates = await collectBrandHits(keepaGuard);
     logger.info('orchestrator', 'candidates collected', {
       deals: dealCandidates.length,
       fixed: fixedCandidates.length,
