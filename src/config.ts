@@ -43,6 +43,10 @@ export const KEEPA_CATEGORIES: readonly number[] = [
 // 旧: 4 (deal score) はジャンク商品が混ざりやすかったため、より明示的なシグナルに変更。
 export const KEEPA_DEAL_SORT_TYPE = 1;
 
+// KeepaTokenGuard の skip 閾値。1 call あたり 5-6 token 消費するため
+// threshold=10 なら 1 call 余裕を持って次 call 可能、それ未満は借入リスク。
+export const KEEPA_TOKEN_THRESHOLD = 10;
+
 // カテゴリごとの draft 上限 (Keepa deals 由来のみ。FIXED_ASINS はこの枠外で別途追加される)。
 // 合計 38 枠 (base allocation)。capacity (MAX_POSTS_PER_RUN) を上回ったぶんは
 // quota.ts の Pass2 overflow が dropPercent 降順で再分配する。
