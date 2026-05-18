@@ -131,55 +131,57 @@ export interface GetDealsResult {
   tokensLeft: number | null;
 }
 
-// /deal endpoint 1 ページあたり Keepa は 150 件返す。本 bot は KEEPA_DEAL_PAGES ページまで巡回。
+// /deal endpoint 1 ページあたり Keepa は 150 件返す。
+// Phase 3 (logical-forging-lerdorf) で getDeals の内部ページループを撤去し、caller (pipelines/deals.ts)
+// が adaptive に page を制御する設計に変更。本定数は caller 側 loop の最大ページ数 (上限) を意味する。
 // 1 token / call なので tokens 消費が増えるが、Pro プラン (1,440/day) に対しては十分余裕がある。
-export const KEEPA_DEAL_PAGES = 3;
+export const KEEPA_DEAL_PAGE_MAX = 3;
+// pipelines/deals.ts や test 等で「デフォルトの開始 page」を参照したい局面用 (= 0 ではなく 1 page 分のみ
+// 取得したい test 等)。実運用 caller は loop index (0..MAX-1) を直接渡すため通常未参照。
+export const KEEPA_DEAL_PAGE_DEFAULT = 1;
 
 // deltaRange の絶対値下げ額。下限 1,500 円は誇大広告 (¥10→¥9 等) 排除のため維持。
 // 上限は旧 ¥100,000 だと高単価商品 (家電/モニター/コーヒー器具) を取りこぼすので、実質上限なしに緩和。
 const DELTA_RANGE_MIN_YEN = 1500;
 const DELTA_RANGE_MAX_YEN = 100_000_000;
 
+// Phase 3: 単一 page 取得に変更 (旧: 内部で 0..KEEPA_DEAL_PAGES-1 を巡回するループ)。
+// caller (pipelines/deals.collectDeals) が KeepaTokenGuard で token 残量を見ながら adaptive に
+// page を進める制御を持つため、本 fn は 1 call = 1 page の単純な責務に絞る。
 export const getDeals = async (
   categoryId: number,
+  page: number,
   sortType: number = KEEPA_DEAL_SORT_TYPE,
 ): Promise<GetDealsResult> => {
   // Keepa Browsing Deals API: POST /deal with DealRequest JSON body.
   // Reference: keepacom/api_backend Request.java#getDealsRequest
   const url = `${KEEPA_BASE}/deal`;
-  const allDeals: Deal[] = [];
-  let lastTokensLeft: number | null = null;
-  for (let page = 0; page < KEEPA_DEAL_PAGES; page += 1) {
-    const dealRequest = {
-      page,
-      domainId: KEEPA_DOMAIN,
-      excludeCategories: [],
-      includeCategories: [categoryId],
-      priceTypes: [0],
-      deltaRange: [DELTA_RANGE_MIN_YEN, DELTA_RANGE_MAX_YEN],
-      deltaPercentRange: [15, 100],
-      isFilterEnabled: true,
-      sortType,
-      dateRange: 0,
-    };
-    const res = await axios.post<KeepaDealsResponse>(url, dealRequest, {
-      params: { key: apiKey() },
-      timeout: 30_000,
-    });
-    const items = res.data.deals?.dr ?? [];
-    if (res.data.tokensLeft !== undefined) lastTokensLeft = res.data.tokensLeft;
-    logger.info('keepa', 'deals fetched', {
-      categoryId,
-      page,
-      tokensLeft: res.data.tokensLeft ?? null,
-      count: items.length,
-    });
-    const parsed = items.map(parseDeal).filter((d): d is Deal => d !== null);
-    allDeals.push(...parsed);
-    // ページが空 or 150 件未満なら最終ページに到達、loop 早期終了で token を節約。
-    if (items.length < 150) break;
-  }
-  return { deals: allDeals, tokensLeft: lastTokensLeft };
+  const dealRequest = {
+    page,
+    domainId: KEEPA_DOMAIN,
+    excludeCategories: [],
+    includeCategories: [categoryId],
+    priceTypes: [0],
+    deltaRange: [DELTA_RANGE_MIN_YEN, DELTA_RANGE_MAX_YEN],
+    deltaPercentRange: [15, 100],
+    isFilterEnabled: true,
+    sortType,
+    dateRange: 0,
+  };
+  const res = await axios.post<KeepaDealsResponse>(url, dealRequest, {
+    params: { key: apiKey() },
+    timeout: 30_000,
+  });
+  const items = res.data.deals?.dr ?? [];
+  const tokensLeft = res.data.tokensLeft ?? null;
+  logger.info('keepa', 'deals fetched', {
+    categoryId,
+    page,
+    tokensLeft,
+    count: items.length,
+  });
+  const deals = items.map(parseDeal).filter((d): d is Deal => d !== null);
+  return { deals, tokensLeft };
 };
 
 // reference price を Keepa stats から選ぶ。

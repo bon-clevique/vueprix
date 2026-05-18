@@ -93,13 +93,12 @@ export const main = async (): Promise<void> => {
     });
 
     // KeepaTokenGuard: 各 Keepa call 前に token 残量を check して低残量時 silent skip する防御層。
-    // Phase 2 (logical-forging-lerdorf) で brand 経路に統合。deals / fixed 経路への拡張は OoS。
+    // Phase 2 (logical-forging-lerdorf) で brand 経路に統合、Phase 3 で deals 経路にも適用。
+    // 1 instance を run 全体で共有することで deals → brand に tokensLeft tracking を継承する。
     const keepaGuard = new KeepaTokenGuard();
-    const { candidates: dealCandidates, lastTokensLeft } = await collectDeals();
+    const { candidates: dealCandidates, lastTokensLeft } = await collectDeals(keepaGuard);
     tokensLeft = lastTokensLeft;
     dealsTotal = dealCandidates.length;
-    // deals 経路の最新 tokensLeft を guard に伝搬しておく (brand 経路の最初の判定で参照される)。
-    keepaGuard.updateTokensLeft(lastTokensLeft);
     const fixedCandidates = await collectFixed();
     const brandCandidates = await collectBrandHits(keepaGuard);
     logger.info('orchestrator', 'candidates collected', {
