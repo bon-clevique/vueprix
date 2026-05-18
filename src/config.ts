@@ -43,6 +43,10 @@ export const KEEPA_CATEGORIES: readonly number[] = [
 // 旧: 4 (deal score) はジャンク商品が混ざりやすかったため、より明示的なシグナルに変更。
 export const KEEPA_DEAL_SORT_TYPE = 1;
 
+// KeepaTokenGuard の skip 閾値。1 call あたり 5-6 token 消費するため
+// threshold=10 なら 1 call 余裕を持って次 call 可能、それ未満は借入リスク。
+export const KEEPA_TOKEN_THRESHOLD = 10;
+
 // カテゴリごとの draft 上限 (Keepa deals 由来のみ。FIXED_ASINS はこの枠外で別途追加される)。
 // 合計 38 枠 (base allocation)。capacity (MAX_POSTS_PER_RUN) を上回ったぶんは
 // quota.ts の Pass2 overflow が dropPercent 降順で再分配する。
@@ -73,7 +77,11 @@ export const CATEGORY_PRIORITY: readonly NotionCategory[] = [
 export const DROP_THRESHOLD_PERCENT = 15;
 export const HISTORY_DAYS = 90;
 
-// 安全装置 (PA-API / Notion 連打抑制)。CATEGORY_QUOTA 合計 + BRAND_QUOTA × WATCH_BRANDS + FIXED_ASINS 想定数を上回る値で運用。
+// 安全装置 (PA-API / Notion 連打抑制)。
+// 現状の最大流入量: CATEGORY_QUOTA 合計 (10+8+5+5+5+3+2 = 38) + WATCH_BRANDS (9) × BRAND_QUOTA (2) = 18 +
+// FIXED_ASINS (9) = 最大 65。MAX_POSTS_PER_RUN=60 で cap が発動しうる (流入 65 > capacity 60)。
+// cap 発動時は orchestrator.ts の concat 順 (brand → deals → fixed) と quota.ts の Pass2 overflow が
+// 後段の優先順位を決め、超過分は dropPercent 降順で truncate される。
 // quota.ts に capacity=MAX_POSTS_PER_RUN を渡すことで Pass2 overflow を解放、未消化カテゴリ枠を他カテゴリで埋める。
 export const MAX_POSTS_PER_RUN = 60;
 export const MIN_PRICE_YEN = 500;
@@ -126,8 +134,15 @@ export const BRAND_CATEGORY_MAP: Record<string, NotionCategory> = {
 export const BRAND_DEFAULT_CATEGORY: NotionCategory = 'kitchen';
 
 // brand あたりの 1 run 採用上限。CATEGORY_QUOTA とは独立枠 (deals 経路を圧迫しない)。
-// 3 brand × 2 件 = 6 件/run。MAX_POSTS_PER_RUN=30 に十分収まる。
+// WATCH_BRANDS=9 × BRAND_QUOTA=2 = 18 件/run。MAX_POSTS_PER_RUN=60 と合わせて流入 65 のうち
+// 18 を brand 枠が占有 (CATEGORY_QUOTA 合計 38 / FIXED_ASINS 9 と合算)。
 export const BRAND_QUOTA = 2;
+
+// brand 経路で 1 brand あたり checkAsin を呼ぶ件数の base limit。
+// 上位 N 件 (deltaPercent90_AMAZON asc = 値下げ大きい順) を checkAsin、quota 未充足なら
+// fallback で次の N 件 (= 合計 max 2 × N = 12 件) を追加 checkAsin。
+// quota=2 × 3 (filter 落ち余裕) = 6 を base、fallback 2 段で最大 12 件まで拡張。
+export const BRAND_CHECKASIN_LIMIT = 6;
 
 // Keepa Product Finder (/query) で要求する values。perPage は max 50。
 // page 0 のみ (page 1-9 は要望次第)。

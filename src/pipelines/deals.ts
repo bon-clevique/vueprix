@@ -1,7 +1,8 @@
 import { mapKeepaCategoryToNotion } from '../category.js';
-import { KEEPA_CATEGORIES, MIN_PRICE_YEN } from '../config.js';
+import { CATEGORY_QUOTA, KEEPA_CATEGORIES, MIN_PRICE_YEN } from '../config.js';
 import { calcDropPercent, isGoodDeal } from '../filter.js';
-import { getDeals } from '../keepa.js';
+import { getDeals, KEEPA_DEAL_PAGE_MAX } from '../keepa.js';
+import type { KeepaTokenGuard } from '../keepa-token-guard.js';
 import { logger } from '../logger.js';
 import { passesTitleWhitelist } from '../title-filter.js';
 import type { Candidate } from '../types.js';
@@ -25,36 +26,67 @@ export interface CollectDealsResult {
 
 // Keepa /deal 経由で全カテゴリの値下げ商品を collect する。
 // MIN_PRICE_YEN / isGoodDeal / title whitelist の早期 filter を本 fn 内で適用。
-// blocklist / activeAsins / quota は orchestrator 側で適用 (本 fn の責務外)。
-export const collectDeals = async (): Promise<CollectDealsResult> => {
+// blocklist / activeAsins / quota は orchestrator 側で適用 (本 fn の責務外、CATEGORY_QUOTA は
+// page loop 内の早期 break 用にのみ参照)。
+//
+// Phase 3 (logical-forging-lerdorf): adaptive pagination + KeepaTokenGuard 統合。
+// - 各 category について page=0..KEEPA_DEAL_PAGE_MAX-1 を順に取得
+// - guard.shouldCall() が false なら残 page を skip + warn log
+// - 当該 category について push した candidates 数が CATEGORY_QUOTA[category] に達したら page 内 break
+// - getDeals 失敗時は logger.error + 次 category へ (経路 isolation、run は止めない)
+export const collectDeals = async (guard: KeepaTokenGuard): Promise<CollectDealsResult> => {
   const candidates: Candidate[] = [];
   let lastTokensLeft: number | null = null;
   for (const categoryId of KEEPA_CATEGORIES) {
+    const category = mapKeepaCategoryToNotion(categoryId);
+    const categoryQuota = CATEGORY_QUOTA[category];
+    let categoryCount = 0;
     try {
-      const { deals, tokensLeft } = await getDeals(categoryId);
-      if (tokensLeft !== null) lastTokensLeft = tokensLeft;
-      const category = mapKeepaCategoryToNotion(categoryId);
-      for (const d of deals) {
-        if (d.currentPrice < MIN_PRICE_YEN) continue;
-        if (!isGoodDeal(d.currentPrice, d.referencePrice)) continue;
-        if (!passesTitleWhitelist(category, d.title)) {
-          logger.debug('pipelines/deals', 'dropped by title whitelist', {
-            asin: d.asin,
-            category,
-            title: d.title,
+      for (let page = 0; page < KEEPA_DEAL_PAGE_MAX; page += 1) {
+        if (!guard.shouldCall()) {
+          logger.warn('pipelines/deals', 'token-low-skip', {
+            categoryId,
+            page,
+            remaining: KEEPA_DEAL_PAGE_MAX - page,
           });
-          continue;
+          break;
         }
-        candidates.push({
-          asin: d.asin,
-          title: d.title,
-          currentPrice: d.currentPrice,
-          referencePrice: d.referencePrice,
-          dropPercent: calcDropPercent(d.currentPrice, d.referencePrice),
-          source: 'deals',
-          category,
-          referenceSource: d.referenceSource,
-        });
+        const { deals, tokensLeft } = await getDeals(categoryId, page);
+        guard.updateTokensLeft(tokensLeft);
+        if (tokensLeft !== null) lastTokensLeft = tokensLeft;
+        for (const d of deals) {
+          if (d.currentPrice < MIN_PRICE_YEN) continue;
+          if (!isGoodDeal(d.currentPrice, d.referencePrice)) continue;
+          if (!passesTitleWhitelist(category, d.title)) {
+            logger.debug('pipelines/deals', 'dropped by title whitelist', {
+              asin: d.asin,
+              category,
+              title: d.title,
+            });
+            continue;
+          }
+          candidates.push({
+            asin: d.asin,
+            title: d.title,
+            currentPrice: d.currentPrice,
+            referencePrice: d.referencePrice,
+            dropPercent: calcDropPercent(d.currentPrice, d.referencePrice),
+            source: 'deals',
+            category,
+            referenceSource: d.referenceSource,
+          });
+          categoryCount += 1;
+        }
+        // category quota 到達で page loop 内 break。次 category へ。
+        if (categoryCount >= categoryQuota) {
+          logger.info('pipelines/deals', 'category-quota-fulfilled', {
+            categoryId,
+            category,
+            page,
+            count: categoryCount,
+          });
+          break;
+        }
       }
     } catch (err) {
       logger.error('pipelines/deals', 'getDeals failed', {

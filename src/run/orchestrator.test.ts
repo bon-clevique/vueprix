@@ -23,6 +23,10 @@ vi.mock('../pipelines/brand.js', () => ({
 vi.mock('../keepa.js', () => ({
   getDeals: (...args: unknown[]) => getDealsMock(...args),
   checkAsin: (...args: unknown[]) => checkAsinMock(...args),
+  // Phase 3 (logical-forging-lerdorf): pipelines/deals.ts が collectDeals 内で参照する。
+  // 既存 orchestrator test は category × 1 page で完結する mock 設計なので 1 にする。
+  // (実 prod では 3、test では loop が 1 回で終わるよう 1 に絞り duplicate push を防止)。
+  KEEPA_DEAL_PAGE_MAX: 1,
 }));
 
 vi.mock('../notion.js', () => ({

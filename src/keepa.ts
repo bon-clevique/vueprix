@@ -131,55 +131,54 @@ export interface GetDealsResult {
   tokensLeft: number | null;
 }
 
-// /deal endpoint 1 ページあたり Keepa は 150 件返す。本 bot は KEEPA_DEAL_PAGES ページまで巡回。
+// /deal endpoint 1 ページあたり Keepa は 150 件返す。
+// Phase 3 (logical-forging-lerdorf) で getDeals の内部ページループを撤去し、caller (pipelines/deals.ts)
+// が adaptive に page を制御する設計に変更。本定数は caller 側 loop の最大ページ数 (上限) を意味する。
 // 1 token / call なので tokens 消費が増えるが、Pro プラン (1,440/day) に対しては十分余裕がある。
-export const KEEPA_DEAL_PAGES = 3;
+export const KEEPA_DEAL_PAGE_MAX = 3;
 
 // deltaRange の絶対値下げ額。下限 1,500 円は誇大広告 (¥10→¥9 等) 排除のため維持。
 // 上限は旧 ¥100,000 だと高単価商品 (家電/モニター/コーヒー器具) を取りこぼすので、実質上限なしに緩和。
 const DELTA_RANGE_MIN_YEN = 1500;
 const DELTA_RANGE_MAX_YEN = 100_000_000;
 
+// Phase 3: 単一 page 取得に変更 (旧: 内部で 0..KEEPA_DEAL_PAGES-1 を巡回するループ)。
+// caller (pipelines/deals.collectDeals) が KeepaTokenGuard で token 残量を見ながら adaptive に
+// page を進める制御を持つため、本 fn は 1 call = 1 page の単純な責務に絞る。
 export const getDeals = async (
   categoryId: number,
+  page: number,
   sortType: number = KEEPA_DEAL_SORT_TYPE,
 ): Promise<GetDealsResult> => {
   // Keepa Browsing Deals API: POST /deal with DealRequest JSON body.
   // Reference: keepacom/api_backend Request.java#getDealsRequest
   const url = `${KEEPA_BASE}/deal`;
-  const allDeals: Deal[] = [];
-  let lastTokensLeft: number | null = null;
-  for (let page = 0; page < KEEPA_DEAL_PAGES; page += 1) {
-    const dealRequest = {
-      page,
-      domainId: KEEPA_DOMAIN,
-      excludeCategories: [],
-      includeCategories: [categoryId],
-      priceTypes: [0],
-      deltaRange: [DELTA_RANGE_MIN_YEN, DELTA_RANGE_MAX_YEN],
-      deltaPercentRange: [15, 100],
-      isFilterEnabled: true,
-      sortType,
-      dateRange: 0,
-    };
-    const res = await axios.post<KeepaDealsResponse>(url, dealRequest, {
-      params: { key: apiKey() },
-      timeout: 30_000,
-    });
-    const items = res.data.deals?.dr ?? [];
-    if (res.data.tokensLeft !== undefined) lastTokensLeft = res.data.tokensLeft;
-    logger.info('keepa', 'deals fetched', {
-      categoryId,
-      page,
-      tokensLeft: res.data.tokensLeft ?? null,
-      count: items.length,
-    });
-    const parsed = items.map(parseDeal).filter((d): d is Deal => d !== null);
-    allDeals.push(...parsed);
-    // ページが空 or 150 件未満なら最終ページに到達、loop 早期終了で token を節約。
-    if (items.length < 150) break;
-  }
-  return { deals: allDeals, tokensLeft: lastTokensLeft };
+  const dealRequest = {
+    page,
+    domainId: KEEPA_DOMAIN,
+    excludeCategories: [],
+    includeCategories: [categoryId],
+    priceTypes: [0],
+    deltaRange: [DELTA_RANGE_MIN_YEN, DELTA_RANGE_MAX_YEN],
+    deltaPercentRange: [15, 100],
+    isFilterEnabled: true,
+    sortType,
+    dateRange: 0,
+  };
+  const res = await axios.post<KeepaDealsResponse>(url, dealRequest, {
+    params: { key: apiKey() },
+    timeout: 30_000,
+  });
+  const items = res.data.deals?.dr ?? [];
+  const tokensLeft = res.data.tokensLeft ?? null;
+  logger.info('keepa', 'deals fetched', {
+    categoryId,
+    page,
+    tokensLeft,
+    count: items.length,
+  });
+  const deals = items.map(parseDeal).filter((d): d is Deal => d !== null);
+  return { deals, tokensLeft };
 };
 
 // reference price を Keepa stats から選ぶ。
@@ -203,41 +202,55 @@ export const pickReferencePrice = (
   return null;
 };
 
-export const checkAsin = async (asin: string): Promise<PriceHistory | null> => {
+// tokensLeft を呼出側に返す版。pipelines/brand.ts が KeepaTokenGuard.updateTokensLeft に渡すため
+// に追加 (Phase 2)。既存 checkAsin は本 fn の thin wrapper にして history のみ取り出す。
+// tokensLeft は Keepa response の optional field なので null 許容。
+export const checkAsinWithTokens = async (
+  asin: string,
+): Promise<{ history: PriceHistory | null; tokensLeft: number | null }> => {
   const url = `${KEEPA_BASE}/product`;
   const res = await axios.get<KeepaProductResponse>(url, {
     params: { key: apiKey(), domain: KEEPA_DOMAIN, asin, stats: HISTORY_DAYS },
     timeout: 30_000,
   });
+  const tokensLeft = res.data.tokensLeft ?? null;
   logger.info('keepa', 'product fetched', {
     asin,
-    tokensLeft: res.data.tokensLeft ?? null,
+    tokensLeft,
   });
   const product = res.data.products?.[0];
-  if (!product?.stats) return null;
+  if (!product?.stats) return { history: null, tokensLeft };
   // Amazon 出品なし商品 (current[0]=-1) でも New (current[1]) で投稿できるよう fallback する。
   const current = toYen(product.stats.current?.[0]) || toYen(product.stats.current?.[1]);
-  if (!current) return null;
+  if (!current) return { history: null, tokensLeft };
   const picked = pickReferencePrice(product.stats, current);
   if (!picked) {
     logger.debug('keepa', 'no reference price above current', { asin, current });
-    return null;
+    return { history: null, tokensLeft };
   }
   const title = typeof product.title === 'string' && product.title.length > 0 ? product.title : '';
   if (!title) {
     logger.debug('keepa', 'checkAsin dropped (no title)', { asin });
-    return null;
+    return { history: null, tokensLeft };
   }
   // calcDropPercent(current, reference) シグネチャに整列。引数順は (current, picked.price)。
   // picked.price > current は pickReferencePrice の post-condition で保証されるが、Math.max(0, ...) は
   // 丸め誤差や invariant 違反時の防御として保持 (二重防御)。
   const dropPercent = Math.max(0, calcDropPercent(current, picked.price));
   return {
-    asin,
-    title,
-    currentPrice: current,
-    referencePrice: picked.price,
-    referenceSource: picked.source,
-    dropPercent,
+    history: {
+      asin,
+      title,
+      currentPrice: current,
+      referencePrice: picked.price,
+      referenceSource: picked.source,
+      dropPercent,
+    },
+    tokensLeft,
   };
+};
+
+export const checkAsin = async (asin: string): Promise<PriceHistory | null> => {
+  const { history } = await checkAsinWithTokens(asin);
+  return history;
 };

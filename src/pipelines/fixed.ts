@@ -26,6 +26,10 @@ export const collectFixed = async (): Promise<Candidate[]> => {
   const candidates: Candidate[] = [];
   for (const asin of FIXED_ASINS) {
     try {
+      // NOTE: 本 fixed 経路は KeepaTokenGuard 未注入 (Spec docs/specs Phase 4 OoS)。
+      // FIXED_ASINS = 9 件で消費 ~50 token と小さく、本 PR scope では deals/brand のみ guard 対象。
+      // 将来 fixed にも guard 拡張する際は checkAsinWithTokens 経由で tokensLeft を取得して
+      // orchestrator の guard instance に update する設計が必要。
       const history = await checkAsin(asin);
       if (!history) continue;
       if (history.currentPrice < MIN_PRICE_YEN) continue;
