@@ -2,18 +2,23 @@ import 'dotenv/config';
 import { randomBytes } from 'node:crypto';
 import { POST_TEXT_MAX_CHARS } from './config.js';
 import { appendHistory } from './history.js';
+import { computeRequiredMinutes, elapsedMinutes, shouldPost } from './interval-gate.js';
 import { logger } from './logger.js';
 import {
   fetchPageById,
+  queryApprovedPageIds,
   updateStatusToPosted,
   type DraftPayload,
   type PostedLinks,
 } from './notion.js';
 import { exceedsXWeightedLimit, xWeightedLength } from './post-length.js';
+import { getLatestSelfPostAt } from './posters/bluesky.js';
 import { dispatch, posters, type PostInput, type PostResult } from './posters/index.js';
 
 interface PublishArgs {
-  pageId: string;
+  // drain モード (cron */5 起動) では page_id を指定しない。null の場合は queryApprovedPageIds で
+  // oldest 1 件を選んで投稿対象にする。workflow_dispatch から手動再投稿する時のみ page_id を渡す。
+  pageId: string | null;
 }
 
 // Notion page id は 32 桁 hex (dash optional) の UUID 形式。
@@ -22,30 +27,97 @@ const NOTION_PAGE_ID_RE = /^[0-9a-f]{8}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{4}-?
 
 const parseArgs = (argv: readonly string[]): PublishArgs => {
   const idx = argv.indexOf('--page-id');
-  if (idx === -1 || idx + 1 >= argv.length) {
-    throw new Error('Usage: tsx src/publish.ts --page-id <notion-page-id>');
+  if (idx === -1) {
+    // drain モード (cron 起動)。queryApprovedPageIds で oldest approved を取りに行く。
+    return { pageId: null };
+  }
+  if (idx + 1 >= argv.length) {
+    throw new Error('--page-id requires a value');
   }
   const pageId = argv[idx + 1];
-  if (!pageId) throw new Error('--page-id requires a value');
+  // workflow_dispatch から空文字列が来た場合も drain モード扱い (Notion automation 廃止後の
+  // 手動 dispatch で page_id を空のまま実行できるようにする)。
+  if (!pageId) return { pageId: null };
   if (!NOTION_PAGE_ID_RE.test(pageId)) {
     throw new Error('--page-id must be a Notion page UUID (32 hex chars, dashes optional)');
   }
   return { pageId };
 };
 
+// drain モードで Notion から oldest approved を 1 件選ぶ。queue が空なら null を返す。
+// queryApprovedPageIds は config 未設定で空配列を返すため、env 未設定で本 fn を呼んでも安全。
+const selectTargetPageId = async (): Promise<string | null> => {
+  const ids = await queryApprovedPageIds();
+  if (ids.length === 0) {
+    logger.info('publish', 'no approved pages, nothing to drain');
+    return null;
+  }
+  logger.info('publish', 'drain mode: picked oldest approved page', {
+    pageId: ids[0],
+    queueDepth: ids.length,
+  });
+  return ids[0] ?? null;
+};
+
+// Bluesky の最新自前 post から経過時間を見て投稿可否を判定する。
+//   - 投稿対象に Bluesky が含まれない (blueskyPosted=true で除外済) → gate 不要、true を返す
+//   - getLatestSelfPostAt が throw → fail-safe で false (誤連投を避けるため投稿しない)
+//   - shouldPost の結果に従う。skip 時は CI ログで経過分数 / 必要分数を出力
+// rng は test 注入用 (production は Math.random)。
+export const checkBlueskyIntervalGate = async (
+  needsBluesky: boolean,
+  now: Date,
+  rng: () => number = Math.random,
+): Promise<boolean> => {
+  if (!needsBluesky) return true;
+  const required = computeRequiredMinutes(rng);
+  let lastPostAt: Date | null;
+  try {
+    lastPostAt = await getLatestSelfPostAt();
+  } catch (err) {
+    logger.error('publish', 'getLatestSelfPostAt failed, fail-safe skip (no post)', {
+      error: err instanceof Error ? err.message : String(err),
+      requiredMinutes: required,
+    });
+    return false;
+  }
+  const ok = shouldPost(lastPostAt, now, required);
+  if (!ok && lastPostAt) {
+    logger.info('publish', 'interval gate blocked, skipping this run', {
+      lastPostAt: lastPostAt.toISOString(),
+      elapsedMinutes: elapsedMinutes(lastPostAt, now),
+      requiredMinutes: Math.round(required * 10) / 10,
+    });
+  } else if (ok) {
+    logger.info('publish', 'interval gate passed', {
+      lastPostAt: lastPostAt ? lastPostAt.toISOString() : null,
+      elapsedMinutes: lastPostAt ? elapsedMinutes(lastPostAt, now) : null,
+      requiredMinutes: Math.round(required * 10) / 10,
+    });
+  }
+  return ok;
+};
+
 export const main = async (argv: readonly string[]): Promise<void> => {
   const startedAt = new Date();
   const runId = `${startedAt.getTime()}-${randomBytes(2).toString('hex')}`;
   const args = parseArgs(argv);
+  // drain モード (page_id 未指定) では Notion から oldest approved を選ぶ。queue 空なら early return。
+  const pageId = args.pageId ?? (await selectTargetPageId());
+  if (!pageId) {
+    logger.info('publish', 'drain mode: queue empty, exiting 0');
+    return;
+  }
   logger.info('publish', 'run started', {
     startedAt: startedAt.toISOString(),
     runId,
-    pageId: args.pageId,
+    pageId,
+    mode: args.pageId ? 'single' : 'drain',
   });
 
   let payload: DraftPayload;
   try {
-    payload = await fetchPageById(args.pageId);
+    payload = await fetchPageById(pageId);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     // fetchPageById は 2 種類の理由で throw する。
@@ -55,13 +127,13 @@ export const main = async (argv: readonly string[]): Promise<void> => {
     const isDataQualityError = /(セール価格|通常価格|割引率)/.test(message);
     if (isDataQualityError) {
       logger.error('publish', 'Notion data quality error, aborting', {
-        pageId: args.pageId,
+        pageId,
         error: message,
       });
       process.exit(1);
     }
     logger.warn('publish', 'page not eligible for publish', {
-      pageId: args.pageId,
+      pageId,
       error: message,
     });
     return;
@@ -72,7 +144,7 @@ export const main = async (argv: readonly string[]): Promise<void> => {
   // Status check (fetchPageById) を擦り抜けるので追加で early return する。
   if (payload.postedAt) {
     logger.warn('publish', 'page already posted, refusing duplicate', {
-      pageId: args.pageId,
+      pageId,
       asin: payload.asin,
       postedAt: payload.postedAt,
     });
@@ -85,7 +157,7 @@ export const main = async (argv: readonly string[]): Promise<void> => {
   // Notion automation を再発火させれば再投稿される。
   if (payload.postText.trim().length === 0) {
     logger.warn('publish', '投稿文 is empty, refusing to post', {
-      pageId: args.pageId,
+      pageId,
       asin: payload.asin,
     });
     return;
@@ -105,7 +177,7 @@ export const main = async (argv: readonly string[]): Promise<void> => {
   // post-length.ts の twitter-text 経由で X 公式の weighted count に揃える。
   if (exceedsXWeightedLimit(payload.postText)) {
     logger.warn('publish', '投稿文 exceeds X weighted char limit, refusing to post', {
-      pageId: args.pageId,
+      pageId,
       asin: payload.asin,
       weightedLength: xWeightedLength(payload.postText),
       codepointLength: [...payload.postText].length,
@@ -124,10 +196,25 @@ export const main = async (argv: readonly string[]): Promise<void> => {
     // checkbox は true で postedAt が空 (運用ミスで Status=approved に戻されたケース等) でも
     // ここに来る。silent loss を避けるため warn のみで何もしない。
     logger.warn('publish', 'all platforms already posted, nothing to do', {
-      pageId: args.pageId,
+      pageId,
       asin: payload.asin,
       xPosted: payload.xPosted,
       blueskyPosted: payload.blueskyPosted,
+    });
+    return;
+  }
+
+  // Bluesky spam label 対策 (PR: post-interval): Bluesky 投稿を含む run では、直前の自前 top-level
+  // post から 5〜15 分 (random) の間隔が空いていない場合 skip して exit 0 する。X だけ retry の
+  // 場合 (xPosted=false, blueskyPosted=true) は gate 不要 — 投稿対象に Bluesky が無いため。
+  // 取得失敗 (API down 等) は fail-safe で skip (誤連投リスクを優先回避)。
+  // skip 時は Status=approved のまま残り、次の cron */5 で再評価される (queue 消化方式)。
+  const needsBluesky = filteredPosters.some((p) => p.name === 'bluesky');
+  const gateOk = await checkBlueskyIntervalGate(needsBluesky, new Date());
+  if (!gateOk) {
+    logger.info('publish', 'skipped by interval gate, exiting 0 (will retry next run)', {
+      pageId,
+      asin: payload.asin,
     });
     return;
   }
@@ -165,7 +252,7 @@ export const main = async (argv: readonly string[]): Promise<void> => {
     x: result.x?.url,
     bluesky: result.bluesky?.url,
   };
-  await updateStatusToPosted(args.pageId, result, new Date(), links, {
+  await updateStatusToPosted(pageId, result, new Date(), links, {
     xPosted: payload.xPosted,
     blueskyPosted: payload.blueskyPosted,
   });

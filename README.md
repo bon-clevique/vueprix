@@ -26,11 +26,16 @@ sequenceDiagram
     Draft->>Claude: generateReason (生活シーン文)
     Draft->>Notion: createDraftPage (Status=pending_review)
     Bon->>Notion: サクラチェッカー確認 → Status=approved
-    Notion->>Webhook: Status changed automation
-    Webhook->>Publish: repository_dispatch (page_id)
-    Publish->>Notion: fetchPageById (Status=approved 確認)
-    Publish->>SNS: X + Bluesky に投稿
-    Publish->>Notion: updateStatusToPosted
+    Note over Publish: cron */5 で起動 (drain mode)
+    Publish->>Notion: queryApprovedPageIds (oldest 1 件選択)
+    Publish->>SNS: getAuthorFeed (Bluesky 直前投稿 createdAt 確認)
+    alt 5〜15 分 (random) 経過していない
+        Publish-->>Publish: exit 0、次回 cron に持ち越し
+    else 経過済
+        Publish->>Notion: fetchPageById (Status=approved 確認)
+        Publish->>SNS: X + Bluesky に投稿
+        Publish->>Notion: updateStatusToPosted
+    end
 ```
 
 ## カテゴリ
@@ -51,7 +56,8 @@ sequenceDiagram
 | コマンド | 説明 |
 |---|---|
 | `npm run draft` | Keepa から候補を取得し、Notion DB に Status=pending_review として書き込む (cron 2h で実行) |
-| `npm run publish -- --page-id <id>` | 指定 page_id の approved 候補を X/Bluesky に投稿し、Status=posted に更新 (Notion automation の repository_dispatch から起動) |
+| `npm run publish` | **drain mode** (cron */5 で実行): Notion から approved の oldest 1 件を選び、Bluesky 連投 gate (5〜15 分間隔) を通過すれば X/Bluesky に投稿 |
+| `npm run publish -- --page-id <id>` | **single mode**: 指定 page_id を投稿 (workflow_dispatch の手動再投稿用)。interval gate は同様に適用 |
 | `npm run typecheck` | `tsc --noEmit` |
 | `npm run lint` | `eslint . --max-warnings=0` |
 | `npm test` | vitest 全 spec 実行 |
@@ -60,8 +66,11 @@ sequenceDiagram
 
 1. **cron (2h)**: `bot.yml` (`vueprix-draft`) → `npm run draft` → Notion DB に pending_review が積まれる
 2. **bon の確認 (10h 以内)**: Notion DB の各 row でサクラチェッカー URL を押して確認 → Status を `approved` / `rejected` / そのまま (10h で expired) のいずれかに変更
-3. **Notion automation**: Status = approved の変更を検知 → GitHub `repository_dispatch` で `event_type=vueprix-publish` を発火
-4. **bot-publish.yml**: `repository_dispatch` を受信 → `npm run publish -- --page-id <id>` → Notion から投稿文を取得 → X / Bluesky に投稿 → Status=posted
+3. **cron (*/5 分、`bot-publish.yml`)**: `npm run publish` (drain mode) → Notion から oldest approved 1 件を選び、Bluesky `app.bsky.feed.getAuthorFeed` で直前自前 top-level post の経過時間をチェック → **5〜15 分 (ランダム) 経過していれば** X/Bluesky に投稿し Status=posted、未達なら exit 0 で次回 cron に持ち越し
+
+> **Bluesky spam label 対策**: 2026-05 月に Bluesky から spam label を受けた経緯から、interval gate を追加した (PR: post-interval)。投稿候補が複数 approved になっても 1 cron で 1 件のみ投稿 (キュー消化方式)。同一文面の連投 diversification は別 PR で対応予定。
+>
+> Notion automation の `repository_dispatch` は廃止 — bon 側で automation を停止する必要あり。
 
 GitHub PAT 設定など Notion 側の構成手順は [docs/notes/notion-approval-flow.md](docs/notes/notion-approval-flow.md) を参照。
 

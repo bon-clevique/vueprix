@@ -3,21 +3,24 @@ import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 const pagesUpdateMock = vi.fn();
 const pagesRetrieveMock = vi.fn();
 const blocksAppendMock = vi.fn();
+const dataSourcesQueryMock = vi.fn();
 vi.mock('@notionhq/client', () => ({
   Client: class {
     pages = { create: vi.fn(), update: pagesUpdateMock, retrieve: pagesRetrieveMock };
-    dataSources = { query: vi.fn() };
+    dataSources = { query: dataSourcesQueryMock };
     blocks = { children: { append: blocksAppendMock } };
   },
 }));
 
 const xPostMock = vi.fn();
 const blueskyPostMock = vi.fn();
+const getLatestSelfPostAtMock = vi.fn();
 vi.mock('./posters/x.js', () => ({
   xPoster: { name: 'x', post: xPostMock },
 }));
 vi.mock('./posters/bluesky.js', () => ({
   blueskyPoster: { name: 'bluesky', post: blueskyPostMock },
+  getLatestSelfPostAt: getLatestSelfPostAtMock,
 }));
 
 const appendHistoryMock = vi.fn();
@@ -33,11 +36,19 @@ describe('publish entrypoint', () => {
     pagesUpdateMock.mockReset();
     pagesRetrieveMock.mockReset();
     blocksAppendMock.mockReset();
+    dataSourcesQueryMock.mockReset();
+    // 既存 single-page test の前提として queryApprovedPageIds は空配列を返す
+    // (--page-id 指定時は drain mode 経由しないので呼ばれないはず)。
+    dataSourcesQueryMock.mockResolvedValue({ results: [], has_more: false });
     xPostMock.mockReset();
     blueskyPostMock.mockReset();
+    getLatestSelfPostAtMock.mockReset();
     appendHistoryMock.mockReset();
     process.env.NOTION_API_KEY = 'secret_xxx';
     process.env.NOTION_VUEPRIX_DATA_SOURCE_ID = 'ds-uuid';
+    // 既存 test 全体の前提として「interval gate は素通り」(古い lastPostAt) にしておく。
+    // gate 動作自体は別の describe block で個別 verify。
+    getLatestSelfPostAtMock.mockResolvedValue(new Date('2026-05-22T00:00:00Z'));
   });
 
   afterEach(() => {
@@ -330,9 +341,19 @@ describe('publish entrypoint', () => {
     expect(appendHistoryMock).not.toHaveBeenCalled();
   });
 
-  it('throws when --page-id is missing', async () => {
+  it('enters drain mode when --page-id is missing and exits 0 if queue is empty', async () => {
+    // drain mode: queryApprovedPageIds は空配列を返す → early return (no throw、no dispatch)
     const { main } = await import('./publish.js');
-    await expect(main(['node', 'publish.ts'])).rejects.toThrow(/--page-id/);
+    await expect(main(['node', 'publish.ts'])).resolves.toBeUndefined();
+    expect(pagesRetrieveMock).not.toHaveBeenCalled();
+    expect(xPostMock).not.toHaveBeenCalled();
+    expect(blueskyPostMock).not.toHaveBeenCalled();
+  });
+
+  it('throws when --page-id has no following value (Usage error)', async () => {
+    // `--page-id` 単体 (値なし) は明示的にエラー。空文字 (workflow_dispatch の空入力) は drain mode。
+    const { main } = await import('./publish.js');
+    await expect(main(['node', 'publish.ts', '--page-id'])).rejects.toThrow(/--page-id/);
   });
 
   it('throws when --page-id is not a valid UUID (HIGH-1: script injection guard)', async () => {
@@ -395,5 +416,114 @@ describe('publish entrypoint', () => {
     expect(xPostMock).not.toHaveBeenCalled();
     expect(blueskyPostMock).not.toHaveBeenCalled();
     exitSpy.mockRestore();
+  });
+
+  // Bluesky spam label 対策 (PR: post-interval): interval gate の挙動 pin。
+  // shouldPost 単体の境界 test は src/interval-gate.test.ts、ここでは publish.ts への統合を確認。
+  describe('Bluesky interval gate', () => {
+    it('skips entire publish (no dispatch, no Status update) when last self-post was < 5 min ago', async () => {
+      // 1 分前 = required 最小 5 分未満で確実に skip
+      const recent = new Date(Date.now() - 1 * 60 * 1000);
+      getLatestSelfPostAtMock.mockResolvedValueOnce(recent);
+      pagesRetrieveMock.mockResolvedValueOnce(buildApprovedPage());
+      const { main } = await import('./publish.js');
+      await main(['node', 'publish.ts', '--page-id', '0123456789abcdef0123456789abcdef']);
+      // dispatch / history / Status update のいずれも触らない (cron 次回まで approved 据え置き)
+      expect(xPostMock).not.toHaveBeenCalled();
+      expect(blueskyPostMock).not.toHaveBeenCalled();
+      expect(pagesUpdateMock).not.toHaveBeenCalled();
+      expect(appendHistoryMock).not.toHaveBeenCalled();
+    });
+
+    it('proceeds when last self-post was > 15 min ago (gate passes for any required minutes)', async () => {
+      // 20 分前 = required 上限 15 分でも通過
+      const old = new Date(Date.now() - 20 * 60 * 1000);
+      getLatestSelfPostAtMock.mockResolvedValueOnce(old);
+      pagesRetrieveMock.mockResolvedValueOnce(buildApprovedPage());
+      pagesUpdateMock.mockResolvedValueOnce({});
+      xPostMock.mockResolvedValueOnce(undefined);
+      blueskyPostMock.mockResolvedValueOnce(undefined);
+      const { main } = await import('./publish.js');
+      await main(['node', 'publish.ts', '--page-id', '0123456789abcdef0123456789abcdef']);
+      expect(xPostMock).toHaveBeenCalledTimes(1);
+      expect(blueskyPostMock).toHaveBeenCalledTimes(1);
+    });
+
+    it('fail-safe: skip when getLatestSelfPostAt throws (avoid double-post)', async () => {
+      // API 失敗時は誤連投リスク回避のため必ず skip。次回 cron で retry。
+      getLatestSelfPostAtMock.mockRejectedValueOnce(new Error('Bluesky getAuthorFeed failed (status 502)'));
+      pagesRetrieveMock.mockResolvedValueOnce(buildApprovedPage());
+      const { main } = await import('./publish.js');
+      await main(['node', 'publish.ts', '--page-id', '0123456789abcdef0123456789abcdef']);
+      expect(xPostMock).not.toHaveBeenCalled();
+      expect(blueskyPostMock).not.toHaveBeenCalled();
+      expect(pagesUpdateMock).not.toHaveBeenCalled();
+      expect(appendHistoryMock).not.toHaveBeenCalled();
+    });
+
+    it('skips gate (no API call) when blueskyPosted=true (X-only retry doesn\'t need throttle)', async () => {
+      pagesRetrieveMock.mockResolvedValueOnce(
+        buildApprovedPage({ bluesky_posted: { checkbox: true } }),
+      );
+      pagesUpdateMock.mockResolvedValueOnce({});
+      xPostMock.mockResolvedValueOnce({ url: 'https://twitter.com/i/web/status/111' });
+      const { main } = await import('./publish.js');
+      await main(['node', 'publish.ts', '--page-id', '0123456789abcdef0123456789abcdef']);
+      // Bluesky 側 throttle は無関係 → getLatestSelfPostAt は呼ばれない
+      expect(getLatestSelfPostAtMock).not.toHaveBeenCalled();
+      // X のみ dispatch
+      expect(xPostMock).toHaveBeenCalledTimes(1);
+      expect(blueskyPostMock).not.toHaveBeenCalled();
+    });
+
+    it('proceeds when getLatestSelfPostAt returns null (no prior posts found)', async () => {
+      // 新規アカウント / 全削除直後 → lastPostAt=null は「初回投稿」とみなして gate 通過。
+      getLatestSelfPostAtMock.mockResolvedValueOnce(null);
+      pagesRetrieveMock.mockResolvedValueOnce(buildApprovedPage());
+      pagesUpdateMock.mockResolvedValueOnce({});
+      xPostMock.mockResolvedValueOnce(undefined);
+      blueskyPostMock.mockResolvedValueOnce(undefined);
+      const { main } = await import('./publish.js');
+      await main(['node', 'publish.ts', '--page-id', '0123456789abcdef0123456789abcdef']);
+      expect(xPostMock).toHaveBeenCalledTimes(1);
+      expect(blueskyPostMock).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  // drain mode (cron */5 起動): page_id 未指定で queryApprovedPageIds の oldest を選んで投稿。
+  describe('drain mode', () => {
+    it('picks oldest approved page from queryApprovedPageIds and publishes 1', async () => {
+      const oldPageId = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
+      // queryApprovedPageIds は 3 件返すが、本 cron では 1 件のみ投稿する (キュー消化)
+      dataSourcesQueryMock.mockResolvedValueOnce({
+        results: [{ id: oldPageId }, { id: 'b'.repeat(32) }, { id: 'c'.repeat(32) }],
+        has_more: false,
+      });
+      pagesRetrieveMock.mockResolvedValueOnce({
+        id: oldPageId,
+        properties: buildApprovedPage().properties,
+      });
+      pagesUpdateMock.mockResolvedValueOnce({});
+      xPostMock.mockResolvedValueOnce(undefined);
+      blueskyPostMock.mockResolvedValueOnce(undefined);
+      const { main } = await import('./publish.js');
+      await main(['node', 'publish.ts']);
+      // oldest 1 件のみ dispatch
+      expect(xPostMock).toHaveBeenCalledTimes(1);
+      expect(blueskyPostMock).toHaveBeenCalledTimes(1);
+      // pages.retrieve は oldest の page_id で呼ばれている
+      expect(pagesRetrieveMock).toHaveBeenCalledWith(
+        expect.objectContaining({ page_id: oldPageId }),
+      );
+    });
+
+    it('exits 0 (no error) when queue is empty', async () => {
+      dataSourcesQueryMock.mockResolvedValueOnce({ results: [], has_more: false });
+      const { main } = await import('./publish.js');
+      await expect(main(['node', 'publish.ts'])).resolves.toBeUndefined();
+      expect(pagesRetrieveMock).not.toHaveBeenCalled();
+      expect(xPostMock).not.toHaveBeenCalled();
+      expect(blueskyPostMock).not.toHaveBeenCalled();
+    });
   });
 });

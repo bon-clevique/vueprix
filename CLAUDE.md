@@ -42,3 +42,6 @@ GitHub Actions: `.github/workflows/ci.yml` (PR/push) と `.github/workflows/bot.
 - Notion DB「vueprix 投稿文」に `x_posted` / `bluesky_posted` (checkbox) プロパティが必要 (bon 手動追加済、ADR-005)
 - env: `AMAZON_PARTNER_TAG` (旧 `PAAPI_PARTNER_TAG`、GitHub Secrets + .env 更新必須)
 - 親プロジェクト clevique の PR / Squash Merge / `--base main` 規約に従う
+- **Publish flow (PR: post-interval)**: `bot-publish.yml` は **cron */5** で起動し drain mode で Notion approved の oldest 1 件のみ投稿する。`src/publish.ts` 内で Bluesky の最新自前 top-level post から **5〜15 分 (ランダム)** 経過しているか `app.bsky.feed.getAuthorFeed` で確認し、不足なら exit 0 で skip (Status=approved 据え置き → 次回 cron で retry)。getAuthorFeed 失敗時は **fail-safe で skip**。同一文面の連投 diversification は本 PR スコープ外 — 別 PR で対応する
+- env (Bluesky): `BLUESKY_IDENTIFIER` / `BLUESKY_APP_PASSWORD` / `BLUESKY_DID`。旧 `BSKY_IDENTIFIER` / `BSKY_PASSWORD` は fallback で読まれるため、secrets rename は段階的に実施可 (空文字 = 未設定扱い)
+- Notion automation の `repository_dispatch` (event_type=vueprix-publish) は本 PR で workflow から廃止。bon 側で automation を停止する運用変更が必要

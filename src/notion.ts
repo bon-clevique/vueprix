@@ -572,6 +572,33 @@ export const queryDuplicateAsins = async (now: Date): Promise<Set<string>> => {
   return asins;
 };
 
+// drain モード (cron */5) 用: Status=approved の page id を「候補生成日時 昇順」で取得する。
+// FIFO 消化: 最も古い approved 行を最初に投稿対象にする (Notion 上の手動承認順序を尊重)。
+// limit 既定 20: 1 cron で 1 件投稿 + 残りは次回繰越なので、queue が膨らんでも 1 page クエリで足りる想定。
+// publish.ts 側で xPosted/blueskyPosted を再判定するため、ここでは page_id のみ返す (軽量化)。
+export const queryApprovedPageIds = async (limit = 20): Promise<string[]> => {
+  if (!isConfigured()) {
+    logger.warn('notion', 'env not configured, returning empty approved list');
+    return [];
+  }
+  const dataSourceId = process.env.NOTION_VUEPRIX_DATA_SOURCE_ID as string;
+  const client = buildClient();
+  const filter = {
+    property: 'Status',
+    status: { equals: STATUS.APPROVED },
+  };
+  const sorts = [{ property: '候補生成日時', direction: 'ascending' as const }];
+  const res = (await client.dataSources.query({
+    data_source_id: dataSourceId,
+    filter,
+    sorts,
+    page_size: limit,
+  })) as unknown as NotionQueryResult;
+  const pageIds = res.results.map((p) => p.id);
+  logger.info('notion', 'approved page ids queried', { count: pageIds.length, limit });
+  return pageIds;
+};
+
 // Notion ブラックリスト DB から「2 度と紹介しない」ASIN を全件取得する。
 // queryDuplicateAsins と異なり Status / 日付 filter なし (登録の事実 = 恒久ブロック意図)。
 // 失敗時の挙動 (`blocklist.md` が file 失敗を warn + 空 Set で吸収するのと意図的に非対称):
