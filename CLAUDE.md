@@ -1,3 +1,11 @@
+<!-- product-binding (Clevique Product DB との機械判定用。c2 はこのブロックで所属プロダクトを確定する) -->
+<!--
+product_name: vueprix
+product_page_id: 3613ad52-d5ca-800f-87bc-c74b9d6df049
+product_db: https://www.notion.so/6a0161c24230440ab86d7b30af1b71b9
+role: SNS 価格アラート bot 本体
+-->
+
 # vueprix
 
 ## Product Intent
